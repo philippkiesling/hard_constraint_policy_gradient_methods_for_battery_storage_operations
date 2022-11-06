@@ -1,3 +1,9 @@
+"""
+Webscraping of the data from the website energy-charts.info
+Both the old and the new API are supported.
+The old API is valid until 2019-12-31 and the new API is valid from 2020-01-01
+"""
+
 import requests
 import json
 import pandas as pd
@@ -10,7 +16,15 @@ time_step = one_week + quarter_hour
 
 
 def get_energy_chart_data(year, month):
+    """
+    Get raw data from energy-charts.info for a given year and month
+    Args:
+        year: year to get data for
+        month: month to get data for
 
+    Returns:
+        pandas DataFrame with data
+    """
 
     url = f"https://energy-charts.info/charts/price_spot_market/raw_data/de/month_{year}_{month}.json"
     url = f"https://energy-charts.info/charts/price_spot_market/raw_data/de/week_15min_{year}_{month}.json"
@@ -40,7 +54,17 @@ def get_energy_chart_data(year, month):
             #return webscraping
 
 def get_energy_chart_data_new_api(year, month, frequency = "15min"):
+    """
+    Get data from energy-charts.info for a given year and month and preprocess it to a pandas DataFrame
+    Uses the new API (Valid from 2020-01-01)
+    Args:
+        year: year to get data for
+        month: month to get data for
+        frequency: frequency of the data. Valid values are "15min", "hour", "day", "week", "month"
 
+    Returns:
+        pandas DataFrame with data
+    """
     if frequency == "15min":
         url = f"https://energy-charts.info/charts/price_spot_market/data/de/week_15min_{year}_{month}.json"
     elif frequency ==  "hour":
@@ -68,7 +92,16 @@ def get_energy_chart_data_new_api(year, month, frequency = "15min"):
     return df
             #return webscraping
 
-def get_yearly_energy_chart_data(year ):
+def get_yearly_energy_chart_data_old_api(year):
+    """
+    Get data from energy-charts.info for a given year and preprocess it to a pandas DataFrame
+    Old API (Valid until 2019-12-31)
+    Args:
+        year: year to get data for
+
+    Returns:
+        list of pandas DataFrames with data for each api call
+    """
     data = []
     for month_int in range(1, 13):
         if month_int < 10:
@@ -83,6 +116,15 @@ def get_yearly_energy_chart_data(year ):
 
 
 def get_yearly_energy_chart_data_new_api(year, frequency = "15min" ):
+    """
+    Get data from energy-charts.info for a given year and preprocess it to a pandas DataFrame
+    New API (Valid from 2020-01-01)
+    Args:
+        year: year to get data for
+        frequency: frequency of the data. Valid values are "15min", "hour", "day", "week", "month"
+    Returns:
+        list of pandas DataFrames with data for each api call
+    """
     data = []
     for month_int in range(1, 13):
         if month_int < 10:
@@ -101,13 +143,17 @@ api_version = "new"
 frequency = "hour"
 
 if __name__ == '__main__':
+    """
+    Get data from energy-charts.info for a given year and preprocess it to a pandas DataFrame
+    """
     data = []
     for year in range(start_year,end_year):
         print(year)
         if api_version == "new":
             data += get_yearly_energy_chart_data_new_api(year, frequency=frequency)
         else:
-            data += get_yearly_energy_chart_data(year, frequency = frequency)
+            data += get_yearly_energy_chart_data_old_api(year, frequency = frequency)
 
     complete_data = pd.concat(data)
     complete_data.to_csv(f"../../webscraping/energy_chart_data_{start_year}_{end_year}_{api_version}-api_{frequency}.csv")
+
