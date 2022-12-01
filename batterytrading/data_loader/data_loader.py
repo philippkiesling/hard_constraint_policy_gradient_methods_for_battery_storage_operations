@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-
+import math
 
 def get_15min_data(root_path=""):
     """
@@ -50,7 +50,7 @@ def get_hourly_data(root_path=""):
     return df_hour
 
 
-def get_data(root_path="") -> pd.DataFrame:
+def get_data(root_path="", time_interval = "15min")  -> pd.DataFrame:
     """
     Get 15min and hourly data from csv.
     Interpolates hourly data to 15min data.
@@ -86,11 +86,14 @@ def get_data(root_path="") -> pd.DataFrame:
     max_index = df[~df["intraday_15min"].isna()].index.max()
     df = df.loc[min_index:max_index]
     df["intraday_15min"] = df["intraday_15min"].interpolate("linear")
+    if time_interval == "H":
+        df = df.resample("H").mean()
+        df["intraday_15min"] = df["intraday_15min"].interpolate("linear")
     return df
 
 
 class Data_Loader_np:
-    def __init__(self, price_time_horizon=1.5, data=None, root_path=""):
+    def __init__(self, price_time_horizon=1.5, data=None, root_path="", time_interval="15min"):
         """
         Initialize the Data Loader
         The returned intraday prices are historic and can therefore vary.
@@ -99,10 +102,10 @@ class Data_Loader_np:
         Args:
             price_time_horizon: Number of days to return intraday prices
         """
-        self.data = get_data(root_path=root_path)
+        self.data = get_data(root_path=root_path, time_interval=time_interval)
         self.current_index = 0
         self.max_index = len(self.data) - 1
-
+        self.time_interval = time_interval
         # Initialize the day ahead price as NaN
         self.day_ahead_price = np.zeros((24 + 12) * 4)
         self.day_ahead_price[:] = np.NAN
@@ -148,6 +151,19 @@ class Data_Loader_np:
         self.intraday_price = np.roll(self.intraday_price, 1)
         self.intraday_price[0] = self.data.iloc[self.current_index]["intraday_15min"]
         return self.intraday_price, False
+    def _get_time_features(self):
+        """
+        Get the current time of day
+        Returns:
+            time of day
+        """
+        try:
+            np.sin((1/4))
+            current_tod = self.data.iloc[self.current_index].name.hour + self.data.iloc[self.current_index].name.minute / 60
+            current_sin = np.sin((current_tod)/4)
+            return current_sin / 60, False
+        except(IndexError):
+            return None, True
 
     def get_next_day_ahead_and_intraday_price(self):
         """
@@ -158,16 +174,22 @@ class Data_Loader_np:
         self.current_index += 1
         day_ahead_price, done_day_ahead = self.get_next_day_ahead_price()
         intraday_price, done_intraday = self.get_next_intraday_price()
+        time_features, done_time_features = self._get_time_features()
+        #features = np.hstack([intraday_price[0], time_features])
+        features = np.hstack([intraday_price[0]])
+        price = intraday_price[0]
+        done = done_day_ahead or done_intraday or done_time_features
 
-        return day_ahead_price, intraday_price, done_intraday + done_day_ahead
+        return features, price, done
 
 
 if __name__ == "__main__":
-    data_loader = Data_Loader_np()
+    data_loader = Data_Loader_np(time_interval="H")
     while True:
         (
             day_ahead_price,
             intraday_price,
+            time_features,
             done,
         ) = data_loader.get_next_day_ahead_and_intraday_price()
         if done:
