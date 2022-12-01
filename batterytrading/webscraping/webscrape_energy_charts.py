@@ -79,7 +79,7 @@ def get_energy_chart_data(year, week, frequency="15min"):
 def get_yearly_energy_chart_data(year, frequency="15min"):
     """
     Get data from energy-charts.info for a given year and preprocess it to a pandas DataFrame
-    Old API (Valid until 2019-12-31)
+    Both the old and the new API are supported. (get_energy_chart_data, figures out which API to use)
     Args:
         year: year to get data for
 
