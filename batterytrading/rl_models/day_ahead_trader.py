@@ -1,18 +1,19 @@
-from src.environment import Environment
+from batterytrading.environment import Environment
 import numpy as np
 
-class Day_Ahead_Trader():
-    def __init__(self, max_charge = 0.15, total_storage_capacity = 1, initial_charge = 0.0, max_SOC = 1):
+
+class Day_Ahead_Trader:
+    def __init__(self, max_charge=0.15, total_storage_capacity=1, initial_charge=0.0, max_SOC=1):
         self.max_charge = max_charge
         self.max_SOC = max_SOC
         self.min_SOC = 0
         self.total_storage_capacity = total_storage_capacity
         self.initial_charge = initial_charge
-        self.SOC = initial_charge
+        self.SOC = np.array([initial_charge])
         self.TOTAL_EARNINGS = 0
         self.action_valid = []
         self.day_ahead_price = 0
-        self.trajectory = np.zeros((24+12)*4)
+        self.trajectory = np.zeros((24 + 12) * 4)
         self.n_charges_per_day = self._get_max_times()
 
     def step(self, state, reward):
@@ -48,7 +49,7 @@ class Day_Ahead_Trader():
 
         """
         discharge_index, charge_index = self._get_charging_timesteps()
-        trajectory = np.zeros((24+12)*4)
+        trajectory = np.zeros((24 + 12) * 4)
         trajectory[charge_index] = 1
         trajectory[discharge_index] = -1
         return trajectory
@@ -60,7 +61,7 @@ class Day_Ahead_Trader():
         Returns:
             maximum number of times the battery can be charged and discharged in a day
         """
-        max_times = np.ceil(self.max_SOC/self.max_charge)
+        max_times = np.ceil(self.max_SOC / self.max_charge)
         return int(max_times)
 
     def _get_charging_timesteps(self):
@@ -70,15 +71,15 @@ class Day_Ahead_Trader():
         Returns:
             index of the n_charges lowest and highest prices
         """
-        n_charges = int(self.n_charges_per_day *5)
-        n_charges_lowest_prices = np.argpartition(self.day_ahead_price[12*4:], n_charges)[:n_charges] +12*4
-        n_charges_highest_prices = np.argpartition(self.day_ahead_price[12*4:], -n_charges)[-n_charges:] +12*4
+        n_charges = int(self.n_charges_per_day * 5)
+        n_charges_lowest_prices = np.argpartition(self.day_ahead_price[12 * 4 :], n_charges)[:n_charges] + 12 * 4
+        n_charges_highest_prices = np.argpartition(self.day_ahead_price[12 * 4 :], -n_charges)[-n_charges:] + 12 * 4
         return n_charges_lowest_prices, n_charges_highest_prices
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     """
-        Test the day ahead trader
+    Test the day ahead trader
     """
     env = Environment()
     trader = Day_Ahead_Trader()
