@@ -12,7 +12,10 @@ class Environment(core.Env):
                  price_time_horizon=1.5,
                  data_root_path="",
                  time_interval="15min",
-                 wandb_run=None):
+                 wandb_run=None,
+                 n_past_timesteps=1,
+                 time_features=False
+                 ):
         """
         Initialize the Environment
         Args:
@@ -32,7 +35,10 @@ class Environment(core.Env):
         self.SOC = initial_charge
         self.initial_charge = initial_charge
         self.TOTAL_EARNINGS = 0
-        self.max_charge = max_charge
+        if time_interval == "H":
+            self.max_charge = max_charge * 4
+        else:
+            self.max_charge = max_charge
         self.max_SOC = max_SOC
         self.min_SOC = 0
         self.TOTAL_STORAGE_CAPACITY = total_storage_capacity
@@ -43,8 +49,13 @@ class Environment(core.Env):
         self.action_valid = []
         self.time_step = time_interval
         self.price_time_horizon = price_time_horizon
-        self.data_loader = Data_Loader_np(price_time_horizon=price_time_horizon, root_path=data_root_path, time_interval=time_interval)
-        features, _,_ = self._get_next_state(np.array(0))
+        self.data_loader = Data_Loader_np(price_time_horizon=price_time_horizon,
+                                          root_path=data_root_path,
+                                          time_interval=time_interval,
+                                          n_past_timesteps=n_past_timesteps,
+                                          time_features=time_features)
+
+        features, _, _ = self._get_next_state(np.array(0))
         self.observation_space = spaces.Box(low= -100, high = 1000, shape=features.shape, dtype=np.float32)
         self.reset()
 
@@ -94,7 +105,7 @@ class Environment(core.Env):
         # assert self.state is not None, "Call reset before using step method."
 
         # Clip action into a valid space
-        self.action_valid.append(np.abs(action) <= self.max_charge)
+        self.action_valid.append(int(np.abs(action) <= self.max_charge))
         # Reduce action to max_charge (maximum charge/discharge rate per period)
         action = np.clip(action, -self.max_charge, self.max_charge)
         # Clip action into the valid space
@@ -111,7 +122,7 @@ class Environment(core.Env):
                                 "action": action,
                                 "price": price,
                                 "SOC": self.SOC,
-                                "action_valid": np.mean(self.action_valid),
+                                "action_valid": self.action_valid[-1],
                                 "total_earnings": self.TOTAL_EARNINGS})
         #next_state = np.hstack([next_state["SOC"], next_state["historic_price"][0], next_state["time_features"]])
         return next_state,rewards, done, {}
@@ -140,7 +151,7 @@ class Environment(core.Env):
             Earnings/Reward
         """
 
-        sold_amount = rel_amount * self.TOTAL_STORAGE_CAPACITY
+        sold_amount = (-rel_amount) * self.TOTAL_STORAGE_CAPACITY
         earnings = + sold_amount * price
         self.TOTAL_EARNINGS += earnings
         return earnings

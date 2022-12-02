@@ -93,7 +93,7 @@ def get_data(root_path="", time_interval = "15min")  -> pd.DataFrame:
 
 
 class Data_Loader_np:
-    def __init__(self, price_time_horizon=1.5, data=None, root_path="", time_interval="15min"):
+    def __init__(self, price_time_horizon=1.5, data=None, root_path="", time_interval="15min", n_past_timesteps = 1, time_features = True):
         """
         Initialize the Data Loader
         The returned intraday prices are historic and can therefore vary.
@@ -112,6 +112,8 @@ class Data_Loader_np:
         # Initialize the intraday price as NaN
         intraday_sequence_length = int(24 * price_time_horizon * 4)
         self.intraday_price = np.zeros(intraday_sequence_length)
+        self.n_past_timesteps = n_past_timesteps
+        self.time_features = time_features
         # self.intraday_price[:] = np.NAN
 
     def reset(self):
@@ -161,6 +163,12 @@ class Data_Loader_np:
             np.sin((1/4))
             current_tod = self.data.iloc[self.current_index].name.hour + self.data.iloc[self.current_index].name.minute / 60
             current_sin = np.sin((current_tod)/4)
+            current_cos = np.cos((current_tod)/4)
+            current_sin2 = np.sin((current_tod)/12)
+            current_cos2 = np.cos((current_tod)/12)
+            current_sin3 = np.sin((current_tod)/24)
+            current_cos3 = np.cos((current_tod)/24)
+            #return np.array([current_sin, current_cos, current_sin2, current_cos2, current_sin3, current_cos3]), False
             return current_sin / 60, False
         except(IndexError):
             return None, True
@@ -176,7 +184,10 @@ class Data_Loader_np:
         intraday_price, done_intraday = self.get_next_intraday_price()
         time_features, done_time_features = self._get_time_features()
         #features = np.hstack([intraday_price[0], time_features])
-        features = np.hstack([intraday_price[0]])
+        if self.time_features:
+            features = np.hstack([intraday_price[0:self.n_past_timesteps], time_features ])
+        else:
+            features = np.hstack([intraday_price[0:self.n_past_timesteps]])
         price = intraday_price[0]
         done = done_day_ahead or done_intraday or done_time_features
 

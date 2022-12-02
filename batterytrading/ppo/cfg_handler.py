@@ -7,7 +7,8 @@ from batterytrading.environment import Environment
 import wandb
 from wandb.integration.sb3 import WandbCallback
 import torch.nn as nn
-
+import gym
+import numpy as np
 def get_config(config_path):
     """
     loads config from yaml file
@@ -30,13 +31,14 @@ def get_config(config_path):
     env_config = config["env"]
     train_config = config["train"]
     wandb_config = config["wandb"]
-
+    config_copy = config.copy()
     # create environment
     if wandb_config.pop("use_wandb"):
         model_save_path = wandb_config.pop("model_save_path")
         run = wandb.init(**wandb_config)
-        train_config["callback"] = WandbCallback(gradient_save_freq=1000,
+        train_config["callback"] = WandbCallback(gradient_save_freq=10,
                                                  model_save_path=model_save_path + f"/{run.id}")
+        wandb.save(config_path)
     else:
         run = None
 
@@ -46,7 +48,14 @@ def get_config(config_path):
         model_config["env"] = _get_configured_env(env_config)
 
     # Convert learning rate to float
-    model_config["learning_rate"] = float(model_config["learning_rate"])
+    if model_config["learning_rate"] == "schedule":
+        model_config["learning_rate"] = lambda f: f * 3e-4
+    else:
+        try:
+            model_config["learning_rate"] = float(model_config["learning_rate"])
+        except ValueError:
+            raise ValueError("learning rate must be a float or 'schedule'")
+
     # resolve activation function
     model_config["policy_kwargs"]["activation_fn"] = _resolve_activation_function(model_config["policy_kwargs"]["activation_fn"])
     if "lstm" in model_config["policy"].lower():
@@ -96,7 +105,23 @@ def _get_configured_env(env_config):
     Returns:
         env (object): environment
     """
+    env_preprocessing = env_config.pop("preprocessing")
+
     env = Environment(**env_config)
+    if env_preprocessing["clipaction"]:
+        env = gym.wrappers.ClipAction(env)
+    if env_preprocessing["normalizeobservation"]:
+        env = gym.wrappers.NormalizeObservation(env)
+    if env_preprocessing["normalizereward"]:
+        env = gym.wrappers.NormalizeReward(env)
+    if env_preprocessing["transformobservation"]:
+        #env = gym.wrappers.TransformObservation(env, lambda x: x.flatten())
+        env = gym.wrappers.TransformObservation(env, lambda x: np.clip(x.flatten(), -10, 10))
+    if env_preprocessing["normalizereward"]:
+        env = gym.wrappers.NormalizeReward(env)
+    if env_preprocessing["transformreward"]:
+        #env = gym.wrappers.TransformReward(env, lambda x: x.flatten())
+        env = gym.wrappers.TransformReward (env, lambda x: np.clip(x.flatten(), -10, 10))
     return env
 
 if __name__ == "__main__":
