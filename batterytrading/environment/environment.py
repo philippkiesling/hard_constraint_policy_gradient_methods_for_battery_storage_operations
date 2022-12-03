@@ -122,7 +122,7 @@ class Environment(core.Env):
                                 "action": action,
                                 "price": price,
                                 "SOC": self.SOC,
-                                "action_valid": self.action_valid[-1],
+                                "action_valid": int(self.action_valid[-1]),
                                 "total_earnings": self.TOTAL_EARNINGS})
         #next_state = np.hstack([next_state["SOC"], next_state["historic_price"][0], next_state["time_features"]])
         return next_state,rewards, done, {}
