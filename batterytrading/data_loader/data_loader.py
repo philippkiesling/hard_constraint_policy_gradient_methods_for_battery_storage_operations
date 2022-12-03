@@ -101,6 +101,12 @@ class Data_Loader_np:
         As in the real world, the next days prices are published at 12:00 of the previous day.
         Args:
             price_time_horizon: Number of days to return intraday prices
+            data: Dataframe with 15min data including Intraday Continuous 15 minutes ID1-Price and Day-Ahead Auction Prices
+            root_path: Path to data folder
+            time_interval: Time interval of the data. Either 15min or H
+            n_past_timesteps: Number of past timesteps to return (intraday prices)
+            time_features: If True, time features are returned
+
         """
         self.data = get_data(root_path=root_path, time_interval=time_interval)
         self.current_index = 0
@@ -169,7 +175,8 @@ class Data_Loader_np:
             current_sin3 = np.sin((current_tod)/24)
             current_cos3 = np.cos((current_tod)/24)
             #return np.array([current_sin, current_cos, current_sin2, current_cos2, current_sin3, current_cos3]), False
-            return current_sin / 60, False
+            #return np.array([current_sin, weekly_sin]), False
+            return current_sin , False
         except(IndexError):
             return None, True
 
