@@ -3,7 +3,7 @@
 
 model:
   #batch_size: 168
-  clip_range: 0.2
+  clip_range: 0.25 # 0.25
   clip_range_vf: 0.001
   ent_coef: 0.0
   #("env", "Pendulum-v1"),
@@ -13,9 +13,9 @@ model:
   learning_rate: schedule
   max_grad_norm: 0.5
   n_epochs: 10
-  n_steps: 672
-  policy: 'MlpLstmPolicy'
-  #policy: 'MlpPolicy'
+  n_steps: 672 # 24 (hour/day) * 4 (intervalls/hour) * 7 (days/week) * 4 (weeks)
+  #policy: 'MlpLstmPolicy'
+  policy: 'MlpPolicy'
   normalize_advantage: True
   sde_sample_freq: 4
   use_sde: True
@@ -23,9 +23,9 @@ model:
   tensorboard_log: .log/log_tb/
   verbose: 1
   policy_kwargs:
-    log_std_init: -1.5 # -1.5
+    log_std_init: -0.5 # -1.5
     ortho_init: True
-    activation_fn: gelu
+    activation_fn: tanh
     lstm_kwargs:
       enable_critic_lstm: False
       lstm_hidden_size: 128
@@ -43,7 +43,7 @@ env:
   price_time_horizon: 1.5
   data_root_path: ""
   time_interval: "15min"
-  n_past_timesteps: 24 # 24/4 timesteps corresponds to 6 hours of historic data as input
+  n_past_timesteps: 4 # 24/4 timesteps corresponds to 6 hours of historic data as input
   time_features: True
   preprocessing:
     clipaction: True
@@ -58,7 +58,7 @@ wandb:
   use_wandb: True
   project: "batterytrading"
   #entity: "batterytrading"
-  name: "mlpLSTM_ppo_15min_one_past_timestep"
+  name: "mlp_ppo_15min_4_timestep_timehorizon_672"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/models
