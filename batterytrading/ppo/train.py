@@ -1,6 +1,6 @@
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
-from batterytrading.ppo import get_config
+from batterytrading.ppo import get_config, ClampedActorCriticPolicy
 
 # Get Conifguration
 model_cfg, train_cfg = get_config("./batterytrading/ppo/cfg.yml")
@@ -12,6 +12,10 @@ if policy_type == "MLP":
 elif policy_type == "LSTM":
     model = RecurrentPPO(**model_cfg)
     print(">>>>>>>> Using Recurrent-PPO <<<<<<<<")
+elif policy_type == "ClampedMlpPolicy":
+    model_cfg["policy"] = ClampedActorCriticPolicy
+    model = PPO(**model_cfg)
+    print(">>>>>>>> Using ClampedMlp-PPO <<<<<<<<")
 else:
     raise ValueError(f"Policy {policy_type} not implemented")
 

@@ -174,8 +174,10 @@ class Data_Loader_np:
             current_cos2 = np.cos((current_tod)/12)
             current_sin3 = np.sin((current_tod)/24)
             current_cos3 = np.cos((current_tod)/24)
+            weekly_sin = np.sin((current_tod)/110)#
+            yearly_sin = np.sin((current_tod)/(110*4*12))#
             #return np.array([current_sin, current_cos, current_sin2, current_cos2, current_sin3, current_cos3]), False
-            #return np.array([current_sin, weekly_sin]), False
+            #return np.array([current_sin, weekly_sin, yearly_sin]), False
             return current_sin , False
         except(IndexError):
             return None, True

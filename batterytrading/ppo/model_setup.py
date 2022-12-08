@@ -9,6 +9,7 @@ from wandb.integration.sb3 import WandbCallback
 import torch.nn as nn
 import gym
 import numpy as np
+
 def get_config(config_path):
     """
     loads config from yaml file
@@ -64,9 +65,14 @@ def get_config(config_path):
         for key in lstm_kwargs:
             model_config["policy_kwargs"][key] = lstm_kwargs[key]
         model_config["policy_kwargs"]
+    elif "clampedmlp" in model_config["policy"].lower():
+        model_config["policy_type"] = "ClampedMlpPolicy"
+        model_config["policy_kwargs"].pop("lstm_kwargs")
     else:
         model_config["policy_type"] = "MLP"
         model_config["policy_kwargs"].pop("lstm_kwargs")
+    # Set action bounds to valid values
+    model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
     return model_config, train_config
 
 def _resolve_activation_function(activation_fn):

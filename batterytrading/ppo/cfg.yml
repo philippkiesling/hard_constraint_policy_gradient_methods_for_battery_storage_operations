@@ -15,7 +15,8 @@ model:
   n_epochs: 10
   n_steps: 672 # 24 (hour/day) * 4 (intervalls/hour) * 7 (days/week) * 4 (weeks)
   #policy: 'MlpLstmPolicy'
-  policy: 'MlpPolicy'
+  #policy: 'MlpPolicy'
+  policy: 'ClampedMlpPolicy'
   normalize_advantage: True
   sde_sample_freq: 4
   use_sde: True
@@ -58,7 +59,7 @@ wandb:
   use_wandb: True
   project: "batterytrading"
   #entity: "batterytrading"
-  name: "mlp_ppo_15min_4_timestep_timehorizon_672"
+  name: "boundedmlp_ppo_15min_4_timestep_timehorizon_672"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/models

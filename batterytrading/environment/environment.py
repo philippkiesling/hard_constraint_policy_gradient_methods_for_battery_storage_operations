@@ -35,6 +35,7 @@ class Environment(core.Env):
         self.SOC = initial_charge
         self.initial_charge = initial_charge
         self.TOTAL_EARNINGS = 0
+        self.ROLLING_EARNINGS = []
         if time_interval == "H":
             self.max_charge = max_charge * 4
         else:
@@ -68,6 +69,7 @@ class Environment(core.Env):
         """
         self.SOC = self.initial_charge
         self.TOTAL_EARNINGS = 0
+        self.ROLLING_EARNINGS = []
         self.action_valid = []
         self.data_loader.reset()
         # super().reset()
@@ -123,7 +125,8 @@ class Environment(core.Env):
                                 "price": price,
                                 "SOC": self.SOC,
                                 "action_valid": int(self.action_valid[-1]),
-                                "total_earnings": self.TOTAL_EARNINGS})
+                                "total_earnings": self.TOTAL_EARNINGS,
+                                "monthly_earnings": np.mean(self.ROLLING_EARNINGS[-672:])})
         #next_state = np.hstack([next_state["SOC"], next_state["historic_price"][0], next_state["time_features"]])
         return next_state,rewards, done, {}
 
@@ -154,7 +157,76 @@ class Environment(core.Env):
         sold_amount = (-rel_amount) * self.TOTAL_STORAGE_CAPACITY
         earnings = + sold_amount * price
         self.TOTAL_EARNINGS += earnings
+        self.ROLLING_EARNINGS.append(earnings)
+
         return earnings
+
+class DiscreteEnvironment(Environment):
+    """
+    A class that inherits from Environment and has a Discrete action space instead of the Contineous.
+    The Agent has three choices, buy, hold, sell. THe Agent will then always buy the full amount possible.
+    """
+    def __init__(self, max_charge=0.15,
+                 total_storage_capacity=1,
+                 initial_charge=0.0,
+                 max_SOC=1,
+                 price_time_horizon=1.5,
+                 data_root_path="",
+                 time_interval="15min",
+                 wandb_run=None,
+                 n_past_timesteps=1,
+                 time_features=False
+                 ):
+        super().__init__(initial_charge,
+                         max_charge,
+                         max_SOC,
+                         total_storage_capacity,
+                         data_root_path,
+                         time_interval,
+                         price_time_horizon,
+                         n_past_timesteps,
+                         time_features,
+                         wandb_run)
+        self.action_space = spaces.Discrete(3)
+        self.action_dict = {-1: "Sell", 0: "Hold", 1: "Buy"}
+
+    def step(self, action):
+        """
+        Perform a (15min) step in the Environment
+        Args:
+            action: action to perform (hold, charge, discharge)
+
+        Returns:
+            next state, reward, done, info
+        """
+        # err_msg = f"{action!r} ({type(action)}) invalid"
+        # assert self.action_space.contains(action), err_msg
+        # assert self.state is not None, "Call reset before using step method."
+
+        # Clip action into a valid space
+        self.action_valid.append(float(np.abs(action) <= self.max_charge))
+        # Reduce action to max_charge (maximum charge/discharge rate per period)
+        action = np.clip(action, -self.max_charge, self.max_charge)
+        # Clip action into the valid space
+        # #(must not be smaller than current SOC, must not be larger than the difference
+        # between maximum SOC and current SOC)
+
+        action = np.clip(action, -self.SOC, self.max_SOC - self.SOC)
+        # Calculate next state
+        next_state, price, done = self._get_next_state(action)
+        # Calculate reward/earnings
+        rewards = self.calculate_earnings(action, price)
+        # Log to wandb
+        if self.wandb_log:
+            self.wandb_run.log({"reward": rewards,
+                                "action": action,
+                                "price": price,
+                                "SOC": self.SOC,
+                                "action_valid": float(self.action_valid[-1]),
+                                "total_earnings": self.TOTAL_EARNINGS,
+                                "monthly_earnings": np.mean(self.ROLLING_EARNINGS[-672:])})
+        #next_state = np.hstack([next_state["SOC"], next_state["historic_price"][0], next_state["time_features"]])
+        return next_state,rewards, done, {}
 
 
 if __name__ == "__main__":

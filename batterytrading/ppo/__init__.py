@@ -1,1 +1,2 @@
-from .cfg_handler import get_config
+from .model_setup import get_config
+from .policies import ClampedActorCriticPolicy
