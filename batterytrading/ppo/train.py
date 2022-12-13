@@ -1,6 +1,6 @@
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
-from batterytrading.ppo import get_config, ClampedActorCriticPolicy
+from batterytrading.ppo import get_config, ClampedActorCriticPolicy, LinearProjectedActorCriticPolicy
 
 # Get Conifguration
 model_cfg, train_cfg = get_config("./batterytrading/ppo/cfg.yml")
@@ -13,16 +13,19 @@ elif policy_type == "LSTM":
     model = RecurrentPPO(**model_cfg)
     print(">>>>>>>> Using Recurrent-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpPolicy":
-    model_cfg["policy"] = ClampedActorCriticPolicy
+    model_cfg["policy"] = LinearProjectedActorCriticPolicy
     model = PPO(**model_cfg)
     print(">>>>>>>> Using ClampedMlp-PPO <<<<<<<<")
+elif policy_type == "LinearProjectedMlpPolicy":
+    model_cfg["policy"] = LinearProjectedActorCriticPolicy
+    model = PPO(**model_cfg)
+    print(">>>>>>>> Using LinearProjectedMlp-PPO <<<<<<<<")
 else:
     raise ValueError(f"Policy {policy_type} not implemented")
 
 # Episodenlänge/ total number of samples to train on
 model.learn(
             **train_cfg)
-
 
 
 # Prediction Script
