@@ -2,7 +2,41 @@ from gym import core
 from gym import spaces
 import numpy as np
 from batterytrading.data_loader import Data_Loader_np
+from gym.wrappers import NormalizeObservation
+from gym.wrappers.normalize import RunningMeanStd
 
+class NormalizeObservationPartially(NormalizeObservation):
+    def __init__(self, env, epsilon=1e-8, normalize_obs=True):
+        super(NormalizeObservationPartially, self).__init__(env)
+        self.num_envs = getattr(env, "num_envs", 1)
+        self.is_vector_env = getattr(env, "is_vector_env", False)
+        if self.is_vector_env:
+            self.obs_rms = RunningMeanStd(shape=self.single_observation_space.shape)
+        else:
+            self.obs_rms = RunningMeanStd(shape=self.observation_space.shape)
+        self.epsilon = epsilon
+
+    def step(self, action):
+        obs, rews, dones, infos = self.env.step(action)
+        obsN = obs[:-2]
+        if self.is_vector_env:
+            obsN = self.normalize(obsN)
+        else:
+            obsN = self.normalize(np.array([obsN]))[0]
+        obs[:-2] = obsN
+        return obs, rews, dones, infos
+
+    def reset(self):
+        obs = self.env.reset()
+        obsN = obs[:-2]
+        self.obs_rms = RunningMeanStd(shape=obsN.shape)
+
+        if self.is_vector_env:
+            obsN = self.normalize(obsN)
+        else:
+            obsN = self.normalize(np.array([obsN]))[0]
+        obs[:-2] = obsN
+        return obs
 
 class Environment(core.Env):
     def __init__(self, max_charge=0.15,
@@ -14,7 +48,8 @@ class Environment(core.Env):
                  time_interval="15min",
                  wandb_run=None,
                  n_past_timesteps=1,
-                 time_features=False
+                 time_features=False,
+                 day_ahead_environment=False
                  ):
         """
         Initialize the Environment
@@ -49,6 +84,7 @@ class Environment(core.Env):
         # Save which action is valid
         self.action_valid = []
         self.time_step = time_interval
+        self.day_ahead_environment = day_ahead_environment
         self.price_time_horizon = price_time_horizon
         self.data_loader = Data_Loader_np(price_time_horizon=price_time_horizon,
                                           root_path=data_root_path,
@@ -56,7 +92,7 @@ class Environment(core.Env):
                                           n_past_timesteps=n_past_timesteps,
                                           time_features=time_features)
 
-        features, _, _ = self._get_next_state(np.array(0))
+        features, _, _= self._get_next_state(np.array(0))
         self.observation_space = spaces.Box(low= -100, high = 1000, shape=features.shape, dtype=np.float32)
         self.reset()
 
@@ -85,12 +121,24 @@ class Environment(core.Env):
         """
 
         self.SOC = self.charge(action)
-        features, price, done = self.data_loader.get_next_day_ahead_and_intraday_price()
+        if self.day_ahead_environment:
+            features, done = self.data_loader.get_next_day_ahead_price()
+            intra_day_price, done= self.data_loader.get_next_intraday_price()
+            price = intra_day_price[0]
+        else:
+            features, price, done = self.data_loader.get_next_day_ahead_and_intraday_price()
+
+        # up_max_charge = np.min([self.max_SOC - self.SOC, self.max_charge])
+        # down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])
+
+        # features = np.hstack([self.SOC, features, down_max_charge, up_max_charge, down_max_charge, up_max_charge])
+
         features = np.hstack([self.SOC, features])
+        #features = np.array([features, np.array((down_max_charge, up_max_charge))])
         return (
             features,
             price,
-            done,
+            done
         )
 
     def step(self, action):
@@ -107,7 +155,8 @@ class Environment(core.Env):
         # assert self.state is not None, "Call reset before using step method."
 
         # Clip action into a valid space
-        self.action_valid.append(int(np.abs(action) <= self.max_charge))
+        valid = (np.abs(action) <= self.max_charge) & (0 <= action + self.SOC) & (action + self.SOC <= self.TOTAL_STORAGE_CAPACITY)
+        self.action_valid.append(float(valid))
         # Reduce action to max_charge (maximum charge/discharge rate per period)
         action = np.clip(action, -self.max_charge, self.max_charge)
         # Clip action into the valid space
@@ -124,11 +173,21 @@ class Environment(core.Env):
                                 "action": action,
                                 "price": price,
                                 "SOC": self.SOC,
-                                "action_valid": int(self.action_valid[-1]),
+                                "action_valid": float(self.action_valid[-1]),
                                 "total_earnings": self.TOTAL_EARNINGS,
-                                "monthly_earnings": np.mean(self.ROLLING_EARNINGS[-672:])})
-        #next_state = np.hstack([next_state["SOC"], next_state["historic_price"][0], next_state["time_features"]])
-        return next_state,rewards, done, {}
+                                "monthly_earnings": np.mean(self.ROLLING_EARNINGS[-672:]),
+                                "monthly_earnings (daily average)": np.mean(self.ROLLING_EARNINGS[-672:])*(24*4)
+
+                                })
+        # Check if reward is a numpy array
+
+        if isinstance(rewards, np.ndarray):
+            rewards = rewards.ravel()
+            rewards = rewards[0]
+
+        if isinstance(rewards, np.ndarray):
+            rewards = rewards[0]
+        return next_state, rewards, done, {}
 
     def charge(self, rel_amount):
         """
@@ -226,7 +285,8 @@ class DiscreteEnvironment(Environment):
                                 "total_earnings": self.TOTAL_EARNINGS,
                                 "monthly_earnings": np.mean(self.ROLLING_EARNINGS[-672:])})
         #next_state = np.hstack([next_state["SOC"], next_state["historic_price"][0], next_state["time_features"]])
-        return next_state,rewards, done, {}
+
+        return next_state, rewards, done, {}
 
 
 if __name__ == "__main__":
