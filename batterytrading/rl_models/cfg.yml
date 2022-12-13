@@ -15,8 +15,7 @@ model:
   n_epochs: 10
   n_steps: 672 # 24 (hour/day) * 4 (intervalls/hour) * 7 (days/week) * 4 (weeks)
   #policy: 'MlpLstmPolicy'
-  #policy: 'MlpPolicy'
-  policy: 'LinearProjected'
+  policy: 'MlpPolicy'
   normalize_advantage: True
   sde_sample_freq: 4
   use_sde: True
@@ -24,7 +23,7 @@ model:
   tensorboard_log: .log/log_tb/
   verbose: 1
   policy_kwargs:
-    log_std_init: -0.75  #-1.5
+    log_std_init: -0.5 # -1.5
     ortho_init: True
     activation_fn: tanh
     lstm_kwargs:
@@ -46,18 +45,20 @@ env:
   time_interval: "15min"
   n_past_timesteps: 4 # 24/4 timesteps corresponds to 6 hours of historic data as input
   time_features: True
+  day_ahead_environment: True
+
   preprocessing:
-    clipaction: True
-    normalizeobservation: True
-    normalizereward: True
-    transformobservation: True
-    transformreward: True
+    clipaction: False
+    normalizeobservation: False
+    normalizereward: False
+    transformobservation: False
+    transformreward: False
 
 wandb:
-  use_wandb: True
+  use_wandb: False
   project: "batterytrading"
   #entity: "batterytrading"
-  name: "LinearProjections"
+  name: "MLP"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/modelNormalizeObservationPartiallys
