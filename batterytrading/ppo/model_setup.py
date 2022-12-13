@@ -3,7 +3,7 @@ Functions to create training and model config
 """
 import yaml
 from pathlib import Path
-from batterytrading.environment import Environment
+from batterytrading.environment import Environment, NormalizeObservationPartially
 import wandb
 from wandb.integration.sb3 import WandbCallback
 import torch.nn as nn
@@ -68,11 +68,19 @@ def get_config(config_path):
     elif "clampedmlp" in model_config["policy"].lower():
         model_config["policy_type"] = "ClampedMlpPolicy"
         model_config["policy_kwargs"].pop("lstm_kwargs")
+        model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
+    elif "linearprojected" in model_config["policy"].lower():
+        model_config["policy_type"] = "LinearProjectedMlpPolicy"
+        model_config["policy_kwargs"].pop("lstm_kwargs")
+        model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
+    elif "linear" in model_config["policy"].lower():
+        model_config["policy_type"] = "LinearPolicy"
+        model_config["policy_kwargs"].pop("lstm_kwargs")
+        model_config["policy_kwargs"].pop("activation_fn")
     else:
         model_config["policy_type"] = "MLP"
         model_config["policy_kwargs"].pop("lstm_kwargs")
     # Set action bounds to valid values
-    model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
     return model_config, train_config
 
 def _resolve_activation_function(activation_fn):
@@ -118,16 +126,15 @@ def _get_configured_env(env_config):
         env = gym.wrappers.ClipAction(env)
     if env_preprocessing["normalizeobservation"]:
         env = gym.wrappers.NormalizeObservation(env)
+        #env = NormalizeObservationPartially(env)
     if env_preprocessing["normalizereward"]:
         env = gym.wrappers.NormalizeReward(env)
     if env_preprocessing["transformobservation"]:
-        #env = gym.wrappers.TransformObservation(env, lambda x: x.flatten())
-        env = gym.wrappers.TransformObservation(env, lambda x: np.clip(x.flatten(), -10, 10))
-    if env_preprocessing["normalizereward"]:
-        env = gym.wrappers.NormalizeReward(env)
+        env = gym.wrappers.TransformObservation(env, lambda x: x.flatten())
+        # env = gym.wrappers.TransformObservation(env, lambda x: np.clip(x[0].flatten(), -10, 10))
     if env_preprocessing["transformreward"]:
         #env = gym.wrappers.TransformReward(env, lambda x: x.flatten())
-        env = gym.wrappers.TransformReward (env, lambda x: np.clip(x.flatten(), -10, 10))
+        env = gym.wrappers.TransformReward (env, lambda x: np.clip(x, -10, 10))
     return env
 
 if __name__ == "__main__":
