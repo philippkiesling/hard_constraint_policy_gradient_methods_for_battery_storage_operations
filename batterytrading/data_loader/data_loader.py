@@ -133,7 +133,7 @@ class Data_Loader_np:
         # self.intraday_price[:] = np.NAN
         return self  #
 
-    def get_next_day_ahead_price(self):
+    def get_next_day_ahead_price(self, set_current_index=True):
         """
         Get the next day ahead price
         Returns:
@@ -145,11 +145,17 @@ class Data_Loader_np:
             self.day_ahead_price[-1] = np.NAN
             if self.data.iloc[self.current_index].name.hour == 12 and self.data.iloc[self.current_index].name.minute == 0:
                 self.day_ahead_price[(12) * 4 :] = self.data.iloc[self.current_index + 12 * 4 : self.current_index + (24 + 12) * 4]["day_ahead"]
+
+            if set_current_index:
+                self.current_index += 1
             return self.day_ahead_price, False
         else:
             return None, True
 
-    def get_next_intraday_price(self):
+    def get_current_timestamp(self):
+        return self.data.iloc[self.current_index].name
+
+    def get_next_intraday_price(self, set_current_index=False):
         """
         Get the next intraday price
         Returns:
@@ -199,7 +205,6 @@ class Data_Loader_np:
             features = np.hstack([intraday_price[0:self.n_past_timesteps]])
         price = intraday_price[0]
         done = done_day_ahead or done_intraday or done_time_features
-
         return features, price, done
 
 

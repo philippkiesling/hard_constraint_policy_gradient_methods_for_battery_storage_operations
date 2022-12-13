@@ -1,6 +1,8 @@
 """
 Functions to create training and model config
 """
+from sys import gettrace as sys_gettrace
+
 import yaml
 from pathlib import Path
 from batterytrading.environment import Environment, NormalizeObservationPartially
@@ -26,7 +28,7 @@ def get_config(config_path):
     Returns:
         (config, train_config) (tuple): config for ppo_model and training
     """
-
+    DEBUG = sys_gettrace() is not None
     config = yaml.safe_load(Path(config_path).read_text())
     model_config = config["model"]
     env_config = config["env"]
@@ -34,7 +36,7 @@ def get_config(config_path):
     wandb_config = config["wandb"]
     config_copy = config.copy()
     # create environment
-    if wandb_config.pop("use_wandb"):
+    if wandb_config.pop("use_wandb") and not DEBUG:
         model_save_path = wandb_config.pop("model_save_path")
         run = wandb.init(**wandb_config)
         train_config["callback"] = WandbCallback(gradient_save_freq=10,
@@ -125,8 +127,8 @@ def _get_configured_env(env_config):
     if env_preprocessing["clipaction"]:
         env = gym.wrappers.ClipAction(env)
     if env_preprocessing["normalizeobservation"]:
-        env = gym.wrappers.NormalizeObservation(env)
-        #env = NormalizeObservationPartially(env)
+        #env = gym.wrappers.NormalizeObservation(env)
+        env = NormalizeObservationPartially(env)
     if env_preprocessing["normalizereward"]:
         env = gym.wrappers.NormalizeReward(env)
     if env_preprocessing["transformobservation"]:

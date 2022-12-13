@@ -3,13 +3,13 @@
 
 model:
   batch_size: 672
-  clip_range: 0.25 # 0.25
+  clip_range: 0.35 # 0.25
   clip_range_vf: 0.001
-  ent_coef: 0.0
+  ent_coef: 0.4
   #("env", "Pendulum-v1"),
   env: BatteryStorageEnv
   gae_lambda: 0.95
-  gamma: 0.99
+  gamma: 0.95 # 0.99
   learning_rate: schedule
   max_grad_norm: 0.5
   n_epochs: 10
@@ -24,9 +24,9 @@ model:
   tensorboard_log: .log/log_tb/
   verbose: 1
   policy_kwargs:
-    log_std_init: -0.75  #-1.5
+    log_std_init: -1.5
     ortho_init: True
-    activation_fn: tanh
+    activation_fn: gelu
     lstm_kwargs:
       enable_critic_lstm: False
       lstm_hidden_size: 128
@@ -46,6 +46,7 @@ env:
   time_interval: "15min"
   n_past_timesteps: 4 # 24/4 timesteps corresponds to 6 hours of historic data as input
   time_features: True
+  prediction_output: "action"
   preprocessing:
     clipaction: True
     normalizeobservation: True
@@ -57,7 +58,7 @@ wandb:
   use_wandb: True
   project: "batterytrading"
   #entity: "batterytrading"
-  name: "LinearProjections"
+  name: "CorrectProjections"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/modelNormalizeObservationPartiallys

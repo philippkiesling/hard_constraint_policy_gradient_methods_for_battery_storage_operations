@@ -49,7 +49,8 @@ class Environment(core.Env):
                  wandb_run=None,
                  n_past_timesteps=1,
                  time_features=False,
-                 day_ahead_environment=False
+                 day_ahead_environment=False,
+                 prediction_output="action"
                  ):
         """
         Initialize the Environment
@@ -83,6 +84,8 @@ class Environment(core.Env):
         self.state = NotImplementedError
         # Save which action is valid
         self.action_valid = []
+        self.prediction_output = prediction_output
+
         self.time_step = time_interval
         self.day_ahead_environment = day_ahead_environment
         self.price_time_horizon = price_time_horizon
@@ -96,6 +99,9 @@ class Environment(core.Env):
         self.observation_space = spaces.Box(low= -100, high = 1000, shape=features.shape, dtype=np.float32)
         self.reset()
 
+
+    def get_current_timestamp(self):
+        return self.data_loader.get_current_timestamp()
 
     def reset(self):
         """
@@ -128,12 +134,12 @@ class Environment(core.Env):
         else:
             features, price, done = self.data_loader.get_next_day_ahead_and_intraday_price()
 
-        # up_max_charge = np.min([self.max_SOC - self.SOC, self.max_charge])
-        # down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])
+        up_max_charge = np.min([self.max_SOC - self.SOC, self.max_charge])
+        down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])
 
-        # features = np.hstack([self.SOC, features, down_max_charge, up_max_charge, down_max_charge, up_max_charge])
+        features = np.hstack([self.SOC, features,  down_max_charge+1e-5, up_max_charge-1e-5])
 
-        features = np.hstack([self.SOC, features])
+        #features = np.hstack([self.SOC, features])
         #features = np.array([features, np.array((down_max_charge, up_max_charge))])
         return (
             features,
@@ -153,9 +159,13 @@ class Environment(core.Env):
         # err_msg = f"{action!r} ({type(action)}) invalid"
         # assert self.action_space.contains(action), err_msg
         # assert self.state is not None, "Call reset before using step method."
-
+        if self.prediction_output == "nextSOC":
+            action = action - self.SOC # action is now the difference of nextSOC to the current SOC
+        elif self.prediction_output == "percentage_action":
+            action = (action-0.5) * self.max_charge
+        epsilon = 1e-1
         # Clip action into a valid space
-        valid = (np.abs(action) <= self.max_charge) & (0 <= action + self.SOC) & (action + self.SOC <= self.TOTAL_STORAGE_CAPACITY)
+        valid = (np.abs(action) <= self.max_charge + epsilon) & (0 <= action + self.SOC + epsilon) & (action + self.SOC <= self.TOTAL_STORAGE_CAPACITY + epsilon)
         self.action_valid.append(float(valid))
         # Reduce action to max_charge (maximum charge/discharge rate per period)
         action = np.clip(action, -self.max_charge, self.max_charge)

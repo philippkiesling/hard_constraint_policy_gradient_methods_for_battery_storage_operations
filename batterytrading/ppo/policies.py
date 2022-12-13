@@ -1,5 +1,6 @@
 from stable_baselines3.common.policies import ActorCriticPolicy
 import torch
+import torch.nn as nn
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 from stable_baselines3.common.distributions import (
     BernoulliDistribution,
@@ -147,11 +148,11 @@ class LinearProjectedActorCriticPolicy(ClampedActorCriticPolicy2):
     def forward(self, obs: torch.Tensor, deterministic: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         last_SOC = obs[:, 0]
         next_SOC, values, log_prob = super(LinearProjectedActorCriticPolicy, self).forward(obs, deterministic)
-        return next_SOC - last_SOC, values, log_prob
+        return next_SOC , values, log_prob
 
     def map_action_to_valid_space(self, action, clamp_params):
-
-        action = self.projection_layer(action)[0]
+        #action = torch.sigmoid(action)
+        action = self.projection_layer(action, clamp_params[0][:1], clamp_params[0][1:2])[0]
         return action
 
     def construct_optimization_layer(self):
@@ -159,12 +160,14 @@ class LinearProjectedActorCriticPolicy(ClampedActorCriticPolicy2):
         from cvxpylayers.torch import CvxpyLayer
         n = 1
         _x = cp.Parameter(1)
-        _y = cp.Variable(n)
-        obj = cp.Minimize(cp.sum_squares(_y - _x))
-        cons = [_y >= 0, _y <= 1]
+        _lower_bound = cp.Parameter(1)
+        _upper_bound = cp.Parameter(1)
+        _action = cp.Variable(n)
+        obj = cp.Minimize(cp.sum_squares(_action - _x))
+        cons = [_action >= _lower_bound, _action <= _upper_bound]
         prob = cp.Problem(obj, cons)
 
-        layer = CvxpyLayer(prob, parameters=[_x], variables=[_y])
+        layer = CvxpyLayer(prob, parameters=[_x, _lower_bound, _upper_bound], variables=[_action])
         return layer
 
 if __name__ == '__main__':
