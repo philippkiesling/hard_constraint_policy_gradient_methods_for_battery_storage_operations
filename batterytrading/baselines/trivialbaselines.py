@@ -1,11 +1,6 @@
-from batterytrading.ppo import get_config
-from batterytrading.environment import Environment
-import numpy as np
-# Get Conifguration
-model_cfg, train_cfg = get_config("./batterytrading/model_based_RL/cfg.yml")
 
-class TrivialModel():
-    def __init__(self, env, policy_fn= "schedule", n_lowest=16, n_highest = 16):
+class BaselineModel():
+    def __init__(self, env, policy_fn="schedule", n_lowest=35, n_highest=35):
         self.env = env
         self.state, reward, done, info = env.step(0)
         self.max_SOC = self.env.max_SOC
@@ -109,7 +104,7 @@ if __name__ == '__main__':
     model_cfg, train_cfg = get_config("./batterytrading/baselines/cfg.yml")
 
     n = 35
-    policy_iteration = TrivialModel(model_cfg["env"], policy_fn="min_max", n_lowest=n, n_highest=n)
+    policy_iteration = BaselineModel(model_cfg["env"], policy_fn="min_max", n_lowest=n, n_highest=n)
     policy_iteration.train(total_timesteps= train_cfg["total_timesteps"])
 
     """ 
