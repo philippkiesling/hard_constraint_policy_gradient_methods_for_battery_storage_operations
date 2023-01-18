@@ -20,14 +20,14 @@ class TrivialModel():
         elif policy_fn == "optimal":
             NotImplementedError("Optimal policy not implemented yet")
         else:
-            NotImplementedError (f"Policy function {policy_fn} not implemented yet")
+            NotImplementedError(f"Policy function {policy_fn} not implemented yet")
 
         if env.time_step == "H":
             self.max_charge = self.env.max_charge * 4
             self.planning_horizon = 12 - offset_from_0["H"]
             self.new_policy_entries = 24
         else:
-            self.planning_horizon = int((36 +12  -offset_from_0["H"]- (offset_from_0["M"]//15)/4)*4)
+            self.planning_horizon = int((36 + 12-offset_from_0["H"]-(offset_from_0["M"]//15)/4)*4)
             self.new_policy_entries = 24 * 4
         self.n_lowest = n_lowest
         self.n_highest = n_highest
@@ -40,13 +40,16 @@ class TrivialModel():
         """
         self.state, reward, done, info = self.env.step(0)
         self.policy = [0 for i in range(self.planning_horizon)]
+        self.total_policy = []
+        self.total_policy += self.policy
         iteration = 0
-        while not done and iteration <total_timesteps:
+        while not done and iteration < total_timesteps:
             current_action = self.policy.pop(0)
             self.state, reward, done, info = self.env.step(current_action)
             if self.env.get_current_timestamp().hour == 12 and self.env.get_current_timestamp().minute == 15:
                 self.policy_fn()
             iteration += 1
+        return self.total_policy
 
     def get_optimal_policy(self):
         """
@@ -54,6 +57,7 @@ class TrivialModel():
         pass
         """
         pass
+
     def get_min_max_policy(self):
         """
         Get the min max strategy for the current state
@@ -71,6 +75,7 @@ class TrivialModel():
         for i in highest_prices:
             new_policy[i] = -1 * self.max_charge
         self.policy += new_policy
+        self.total_policy += self.policy
 
     def get_scheduled_strategy(self):
         """
@@ -93,9 +98,16 @@ class TrivialModel():
         for i in sell_range:
             new_policy[i] = -1 * self.max_charge
         self.policy += new_policy
-
+        self.total_policy += new_policy
 
 if __name__ == '__main__':
+    from batterytrading.ppo import get_config
+    from batterytrading.environment import Environment
+    import numpy as np
+
+    # Get Conifguration
+    model_cfg, train_cfg = get_config("./batterytrading/baselines/cfg.yml")
+
     n = 35
     policy_iteration = TrivialModel(model_cfg["env"], policy_fn="min_max", n_lowest=n, n_highest=n)
     policy_iteration.train(total_timesteps= train_cfg["total_timesteps"])
