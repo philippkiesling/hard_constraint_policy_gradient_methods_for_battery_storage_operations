@@ -139,6 +139,8 @@ class Data_Loader_np:
         Returns:
             day ahead price
         """
+        if set_current_index:
+            self.current_index += 1
         if self.current_index + (24 + 12) * 4 < self.max_index:
             # Rotate the day ahead price one step ahead and delete the last entry
             self.day_ahead_price = np.roll(self.day_ahead_price, -1)
@@ -146,8 +148,7 @@ class Data_Loader_np:
             if self.data.iloc[self.current_index].name.hour == 12 and self.data.iloc[self.current_index].name.minute == 0:
                 self.day_ahead_price[(12) * 4 :] = self.data.iloc[self.current_index + 12 * 4 : self.current_index + (24 + 12) * 4]["day_ahead"]
 
-            if set_current_index:
-                self.current_index += 1
+
             return self.day_ahead_price, False
         else:
             return None, True
@@ -165,6 +166,7 @@ class Data_Loader_np:
         self.intraday_price = np.roll(self.intraday_price, 1)
         self.intraday_price[0] = self.data.iloc[self.current_index]["intraday_15min"]
         return self.intraday_price, False
+
     def _get_time_features(self):
         """
         Get the current time of day
@@ -173,7 +175,7 @@ class Data_Loader_np:
         """
         try:
             np.sin((1/4))
-            current_tod = self.data.iloc[self.current_index].name.hour + self.data.iloc[self.current_index].name.minute / 60
+            current_tod = self.data.iloc[self.current_index].name.hour + self.data.iloc[self.current_index].name.minute/60
             current_sin = np.sin((current_tod)/4)
             current_cos = np.cos((current_tod)/4)
             current_sin2 = np.sin((current_tod)/12)
@@ -184,7 +186,7 @@ class Data_Loader_np:
             yearly_sin = np.sin((current_tod)/(110*4*12))#
             #return np.array([current_sin, current_cos, current_sin2, current_cos2, current_sin3, current_cos3]), False
             #return np.array([current_sin, weekly_sin, yearly_sin]), False
-            return current_sin , False
+            return np.float64(current_tod), False
         except(IndexError):
             return None, True
 
@@ -194,7 +196,9 @@ class Data_Loader_np:
         Returns:
             day ahead price and intraday price
         """
-        self.current_index += 1
+        #self.current_index += 1
+
+
         day_ahead_price, done_day_ahead = self.get_next_day_ahead_price()
         intraday_price, done_intraday = self.get_next_intraday_price()
         time_features, done_time_features = self._get_time_features()
@@ -206,6 +210,68 @@ class Data_Loader_np:
         price = intraday_price[0]
         done = done_day_ahead or done_intraday or done_time_features
         return features, price, done
+
+class RandomSampleDataLoader(Data_Loader_np):
+    def __init__(self, price_time_horizon=1.5, data=None, root_path="", time_interval="15min", n_past_timesteps = 1, time_features = True):
+        """
+        Initialize the Data Loader
+        The returned intraday prices are historic and can therefore vary.
+        The day ahead prices are the official forecasts of the day ahead auction.
+        As in the real world, the next days prices are published at 12:00 of the previous day.
+        Args:
+            price_time_horizon: Number of days to return intraday prices
+            data: Dataframe with 15min data including Intraday Continuous 15 minutes ID1-Price and Day-Ahead Auction Prices
+            root_path: Path to data folder
+            time_interval: Time interval of the data. Either 15min or H
+            n_past_timesteps: Number of past timesteps to return (intraday prices)
+            time_features: If True, time features are returned
+
+        """
+        self.data = get_data(root_path=root_path, time_interval=time_interval)
+        self.current_index = 0
+        self.max_index = len(self.data) - 1
+        self.time_interval = time_interval
+        # Initialize the day ahead price as NaN
+        self.day_ahead_price = np.zeros((24 + 12) * 4)
+        self.day_ahead_price[:] = np.NAN
+        # Initialize the intraday price as NaN
+        intraday_sequence_length = int(24 * price_time_horizon * 4)
+        self.intraday_price = np.zeros(intraday_sequence_length)
+        self.n_past_timesteps = n_past_timesteps
+        self.time_features = time_features
+        # self.intraday_price[:] = np.NAN
+
+    def get_next_day_ahead_price(self, set_current_index=True):
+        """
+        Get the next day ahead price
+        Returns:
+            day ahead price
+        """
+        random_index = np.random.randint(0,len(self.data))
+        if set_current_index:
+            self.current_index += 1
+        if self.current_index + (24 + 12) * 4 < self.max_index:
+            # Rotate the day ahead price one step ahead and delete the last entry
+            self.day_ahead_price = np.roll(self.day_ahead_price, -1)
+            self.day_ahead_price[-1] = np.NAN
+            if self.data.iloc[self.current_index].name.hour == 12 and self.data.iloc[self.current_index].name.minute == 0:
+                self.day_ahead_price[12 * 4:] = self.data.iloc[random_index + 12 * 4: random_index + (24+12) * 4]["day_ahead"]
+            return self.day_ahead_price, False
+        else:
+            return None, True
+
+
+    def get_next_intraday_price(self):
+        """
+        Get the next intraday price
+        Returns:
+            intraday price
+        """
+        # Rotate the day ahead price one step ahead and delete the last entry
+        random_index = np.random.randint(0, len(self.data))
+        self.intraday_price = np.roll(self.intraday_price, 1)
+        self.intraday_price[0] = self.data.iloc[random_index]["intraday_15min"]
+        return self.intraday_price, False
 
 
 if __name__ == "__main__":
