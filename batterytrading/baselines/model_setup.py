@@ -47,7 +47,7 @@ def get_config(config_path):
     if model_config["env"] == "BatteryStorageEnv":
         env_config["wandb_run"] = run
         model_config["env"] = _get_configured_env(env_config)
-
+        model_config["pretrain_env"] = _get_pretrained_env(env_config)
     # Convert learning rate to float
     if model_config["learning_rate"] == "schedule":
         model_config["learning_rate"] = lambda f: f * 3e-4
@@ -60,7 +60,7 @@ def get_config(config_path):
     # resolve activation function
     model_config["policy_kwargs"]["activation_fn"] = _resolve_activation_function(model_config["policy_kwargs"]["activation_fn"])
     if "lstm" in model_config["policy"].lower():
-        model_config["policy_type"] = "LSTM"
+        model_config["policy_type"] = "MlpLstmPolicy"
         lstm_kwargs = model_config["policy_kwargs"].pop("lstm_kwargs")
         for key in lstm_kwargs:
             model_config["policy_kwargs"][key] = lstm_kwargs[key]
@@ -133,6 +133,10 @@ def _get_configured_env(env_config):
         env = gym.wrappers.TransformReward (env, lambda x: np.clip(x, -10, 10))
     return env
 
+def _get_pretrained_env(env_config):
+    env_preprocessing = env_config.pop("preprocessing")
+    env = Environment(**env_config)
+    return env
 if __name__ == "__main__":
     config = get_config("cfg.yml")
     print(config)
