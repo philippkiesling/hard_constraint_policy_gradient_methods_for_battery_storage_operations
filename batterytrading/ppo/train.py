@@ -1,25 +1,41 @@
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
-from batterytrading.ppo import get_config, ClampedActorCriticPolicy, LinearProjectedActorCriticPolicy
+from batterytrading.policies import LinearProjectedActorCriticPolicy, \
+    ClampedMlpLstmPolicy, \
+    ClampedActorCriticPolicy, LinearProjectedMlpLstmPolicy
+from batterytrading.ppo import get_config
+
+#from batterytrading.ppo.policies import
 
 # Get Conifguration
 model_cfg, train_cfg = get_config("./batterytrading/ppo/cfg.yml")
 
+
+
 policy_type = model_cfg.pop("policy_type")
-if policy_type == "MLP":
+if policy_type == "MlpPolicy":
     model = PPO( **model_cfg)
     print(">>>>>>>> Using  MLP-PPO<<<<<<<<")
-elif policy_type == "LSTM":
+elif policy_type == "MlpLstmPolicy":
+    #model_cfg["policy"] = "CnnLstmPolicy"
     model = RecurrentPPO(**model_cfg)
     print(">>>>>>>> Using Recurrent-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpPolicy":
-    model_cfg["policy"] = LinearProjectedActorCriticPolicy
+    model_cfg["policy"] = ClampedActorCriticPolicy
     model = PPO(**model_cfg)
     print(">>>>>>>> Using ClampedMlp-PPO <<<<<<<<")
 elif policy_type == "LinearProjectedMlpPolicy":
     model_cfg["policy"] = LinearProjectedActorCriticPolicy
     model = PPO(**model_cfg)
     print(">>>>>>>> Using LinearProjectedMlp-PPO <<<<<<<<")
+elif policy_type == "ClampedMlpLstmPolicy":
+    model_cfg["policy"] = ClampedMlpLstmPolicy
+    model = RecurrentPPO(**model_cfg)
+    print(">>>>>>>> Using LinearProjectedMlpLstm-PPO <<<<<<<<")
+elif policy_type == "LinearProjectedMlpLstmPolicy":
+    model_cfg["policy"] = LinearProjectedMlpLstmPolicy
+    model = RecurrentPPO(**model_cfg)
+    print(">>>>>>>> Using LinearProjectedMlpLstm-PPO <<<<<<<<")
 else:
     raise ValueError(f"Policy {policy_type} not implemented")
 
