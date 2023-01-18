@@ -1,6 +1,6 @@
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
-from batterytrading.ppo import get_config, ClampedActorCriticPolicy, LinearProjectedActorCriticPolicy
+from batterytrading.ppo import get_config, ValidOutputBaseActorCriticPolicy, LinearProjectedActorCriticPolicy
 from sb3_contrib import ARS
 from batterytrading.environment import Environment
 

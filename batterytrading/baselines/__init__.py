@@ -1,0 +1,1 @@
+from .trivialbaselines import TrivialModel
