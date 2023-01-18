@@ -1,20 +1,14 @@
 import numpy as np
-from stable_baselines3.common.vec_env import DummyVecEnv
-
-import gym
-import numpy as np
-from stable_baselines3 import PPO
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.ppo import MlpPolicy
 from stable_baselines3.ppo.policies import ActorCriticPolicy
 from imitation.algorithms import bc
 from imitation.data import rollout
 from imitation.data.wrappers import RolloutInfoWrapper
 rng = np.random.default_rng(0)
-from batterytrading.ppo import get_config, ClampedActorCriticPolicy, LinearProjectedActorCriticPolicy
+from batterytrading.ppo import get_config
 
-class TrivialModelPretraining():
+class BaselineModelPretraining():
     def __init__(self, env, policy_fn="schedule", n_lowest=35, n_highest=35):
         self.env = env
         self.state, reward, done, info = env.step(0)
@@ -120,7 +114,7 @@ class TrivialModelPretraining():
 
 if __name__ == "__main__":
     def sample_expert_transitions(pretrain_env):
-        expert = TrivialModelPretraining(pretrain_env)
+        expert = BaselineModelPretraining(pretrain_env)
 
         print("Sampling expert transitions.")
         rollouts = rollout.rollout(
