@@ -10,7 +10,7 @@ model:
   env: BatteryStorageEnv
   gae_lambda: 0.95
   gamma: 0.99
-  learning_rate: schedule
+  learning_rate: 1e-1 # schedule
   max_grad_norm: 0.5
   n_epochs: 10
   n_steps: 672 # 24 (hour/day) * 4 (intervalls/hour) * 7 (days/week) * 4 (weeks)
@@ -41,15 +41,15 @@ env:
   price_time_horizon: 1.5
   data_root_path: ""
   time_interval: "15min"
-  n_past_timesteps: 4 # 24/4 timesteps corresponds to 6 hours of historic data as input
+  n_past_timesteps: 0 # 24/4 timesteps corresponds to 6 hours of historic data as input
   time_features: True
   day_ahead_environment: True
   preprocessing:
       clipaction: False
       normalizeobservation: False
-      normalizereward: False
+      normalizereward: True
       transformobservation: False
-      transformreward: False
+      transformreward: True
 
 wandb:
   use_wandb: True

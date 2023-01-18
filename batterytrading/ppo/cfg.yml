@@ -2,38 +2,48 @@
 
 
 model:
-  batch_size: 672
-  clip_range: 0.35 # 0.25
-  clip_range_vf: 0.001
-  ent_coef: 0.4
+  batch_size: 32
+  clip_range: 0.2 # 0.25
+  clip_range_vf: 0.2
+  ent_coef: 0.01 # 0.05-0.01 0.005
   #("env", "Pendulum-v1"),
   env: BatteryStorageEnv
   gae_lambda: 0.95
-  gamma: 0.95 # 0.99
-  learning_rate: schedule
+  gamma: 0.99 # 0.99
+  learning_rate: 'schedule'
   max_grad_norm: 0.5
   n_epochs: 10
-  n_steps: 672 # 24 (hour/day) * 4 (intervalls/hour) * 7 (days/week) * 4 (weeks)
-  #policy: 'MlpLstmPolicy'
+  n_steps: 672 # 96 # 24 (hour/day) * 4 (intervalls/hour) * 7 (days/week) * 4 (weeks)
+  policy: 'MlpLstmPolicy'
   #policy: 'MlpPolicy'
-  policy: 'LinearProjected'
+  #policy: 'linearprojected'
+  #policy: 'clampedlstm'
+  #policy: 'clampedmlp'
+  #policy: 'linearprojectedlstm'
   normalize_advantage: True
-  sde_sample_freq: 4
-  use_sde: True
+  sde_sample_freq: -1
+  use_sde: False
   vf_coef: 0.5
   tensorboard_log: .log/log_tb/
   verbose: 1
+  target_kl:  #0.8 # Higher Value? because Early Stopping kicks in?
   policy_kwargs:
-    log_std_init: -1.5
+    log_std_init: -0.1 # Change this to higher value?
     ortho_init: True
     activation_fn: gelu
+    normalize_images: False
     lstm_kwargs:
-      enable_critic_lstm: False
-      lstm_hidden_size: 128
+      enable_critic_lstm: True
+      lstm_hidden_size: 16
+      n_lstm_layers: 3  # Not the Number of timesteps to keep in the memory
+      lstm_kwargs:
+        #use_attention: True
+        #bidirectional: True
 
+  pretrain: False
 train:
-  total_timesteps: 100000
-  eval_freq: 100
+  total_timesteps: 250000
+  eval_freq: 10
   log_interval: 1
 
 env:
@@ -44,9 +54,11 @@ env:
   price_time_horizon: 1.5
   data_root_path: ""
   time_interval: "15min"
-  n_past_timesteps: 4 # 24/4 timesteps corresponds to 6 hours of historic data as input
-  time_features: True
+  n_past_timesteps: 1 # 24/4 timesteps corresponds to 6 hours of historic data as input
+  time_features: False
   prediction_output: "action"
+  day_ahead_environment: False
+  max_steps: 250000
   preprocessing:
     clipaction: True
     normalizeobservation: True
@@ -58,7 +70,7 @@ wandb:
   use_wandb: True
   project: "batterytrading"
   #entity: "batterytrading"
-  name: "CorrectProjections"
+  name: "SanityCheckIFMLPLSTMWORKS"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/modelNormalizeObservationPartiallys
