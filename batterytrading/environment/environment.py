@@ -1,7 +1,8 @@
+import torch
 from gym import core
 from gym import spaces
 import numpy as np
-from batterytrading.data_loader import Data_Loader_np
+from batterytrading.data_loader import Data_Loader_np, RandomSampleDataLoader
 from gym.wrappers import NormalizeObservation
 from gym.wrappers.normalize import RunningMeanStd
 
@@ -13,7 +14,8 @@ class NormalizeObservationPartially(NormalizeObservation):
         if self.is_vector_env:
             self.obs_rms = RunningMeanStd(shape=self.single_observation_space.shape)
         else:
-            self.obs_rms = RunningMeanStd(shape=self.observation_space.shape)
+            #self.observation_space.shape = (self.observation_space.shape[0],)
+            self.obs_rms = RunningMeanStd(shape=(self.observation_space.shape[0]- 2,) ) # Minus 2 because we don't want to normalize the last two elements of the observation (bounds used for projecting the action to a valid action space)
         self.epsilon = epsilon
 
     def step(self, action):
@@ -48,9 +50,260 @@ class Environment(core.Env):
                  time_interval="15min",
                  wandb_run=None,
                  n_past_timesteps=1,
-                 time_features=False,
+                 time_features=True,
                  day_ahead_environment=False,
-                 prediction_output="action"
+                 prediction_output="action",
+                 max_steps = None
+                 ):
+        """
+        Initialize the Environment
+        Args:
+            max_charge: Maximum charge/discharge rate
+            total_storage_capacity: Total Storage Capacity of the Battery
+            initial_charge: Initial SOC of the Battery
+            max_SOC: Maximum SOC of the Battery
+        """
+        # Initialize the wandb run (if wandb is used)
+        if not (wandb_run is None):
+            self.wandb_log = True
+            self.wandb_run = wandb_run
+        else:
+            self.wandb_log = False
+
+        # Initialize Environment
+        self.SOC = initial_charge
+        self.initial_charge = initial_charge
+        self.TOTAL_EARNINGS = 0
+        self.ROLLING_EARNINGS = []
+        self.action_list = []
+        if time_interval == "H":
+            self.max_charge = max_charge * 4
+        else:
+            self.max_charge = max_charge
+        self.max_SOC = max_SOC
+        self.min_SOC = 0
+        self.TOTAL_STORAGE_CAPACITY = total_storage_capacity
+        # Three actions: Hold, Charge, Discharge
+        self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+        self.state = NotImplementedError
+        # Save which action is valid
+        self.action_valid = []
+        self.prediction_output = prediction_output
+
+        self.time_step = time_interval
+        self.day_ahead_environment = day_ahead_environment
+        self.price_time_horizon = price_time_horizon
+        self.data_loader = Data_Loader_np(price_time_horizon=price_time_horizon,
+                                          root_path=data_root_path,
+                                          time_interval=time_interval,
+                                          n_past_timesteps=n_past_timesteps,
+                                          time_features=time_features)
+
+        features, _, _= self._get_next_state(np.array(0))
+        self.observation_space = spaces.Box(low= -100, high = 1000, shape=features.shape, dtype=np.float32)
+        if max_steps is None:
+            self.max_steps = 99999999999999
+        else:
+            self.max_steps = max_steps
+        self.n_steps = 0
+        self.reset()
+
+
+
+    def get_current_timestamp(self):
+        return self.data_loader.get_current_timestamp()
+
+    def reset(self):
+        """
+        Reset the Environment
+        Returns:
+            Environment (reseted)
+        """
+        self.SOC = self.initial_charge
+        self.TOTAL_EARNINGS = 0
+        self.ROLLING_EARNINGS = []
+        self.action_valid = []
+        self.data_loader.reset()
+        # super().reset()
+        self.n_steps = 0
+        return self.step(np.array(0))[0]
+
+    def _get_next_state(self, action):
+        """
+        Get the next state of the Environment consisting of the SOC, day_ahead-action and the price
+        Args:
+            action: action to perform (hold, charge, discharge)
+        Returns:
+            next state, price, done
+        """
+
+        self.SOC = self.charge(action)
+        if self.day_ahead_environment:
+            features, done = self.data_loader.get_next_day_ahead_price()
+            intra_day_price, done= self.data_loader.get_next_intraday_price()
+            price = intra_day_price[0]
+        else:
+            features, price, done = self.data_loader.get_next_day_ahead_and_intraday_price()
+
+        up_max_charge = np.min([self.max_SOC - self.SOC, self.max_charge])
+        down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])
+
+        features = np.hstack([self.SOC, features])
+        features = np.hstack([self.SOC, features,  down_max_charge, up_max_charge])
+
+        self.set_bounds(down_max_charge, up_max_charge)
+        #features = np.hstack([self.SOC, features])
+        #features = np.array([features, np.array((down_max_charge, up_max_charge))])
+        return (
+            features,
+            price,
+            done
+        )
+    def set_bounds(self, down_max_charge, up_max_charge):
+        self.bounds = torch.Tensor([down_max_charge]), torch.Tensor([up_max_charge])
+
+    def step(self, action):
+        """
+        Perform a (15min) step in the Environment
+        Args:
+            action: action to perform (hold, charge, discharge)
+
+        Returns:
+            next state, reward, done, info
+        """
+        # err_msg = f"{action!r} ({type(action)}) invalid"
+        # assert self.action_space.contains(action), err_msg
+        # assert self.state is not None, "Call reset before using step method."
+        self.n_steps += 1
+
+        if self.prediction_output == "nextSOC":
+            action = action - self.SOC # action is now the difference of nextSOC to the current SOC
+        elif self.prediction_output == "percentage_action":
+            action = (action-0.5) * self.max_charge
+        epsilon = 1e-1
+        # Clip action into a valid space
+        valid = (np.abs(action) <= self.max_charge + epsilon) & (0 <= action + self.SOC + epsilon) & (action + self.SOC <= self.TOTAL_STORAGE_CAPACITY + epsilon)
+        self.action_valid.append(float(valid))
+        # Reduce action to max_charge (maximum charge/discharge rate per period)
+        action = np.clip(action, -self.max_charge, self.max_charge)
+        # Clip action into the valid space
+        # #(must not be smaller than current SOC, must not be larger than the difference
+        # between maximum SOC and current SOC)
+        action = np.clip(action, -self.SOC, self.max_SOC - self.SOC)
+        # Calculate next state
+        next_state, price, done = self._get_next_state(action)
+
+        soc_reward = self.SOC * 0.25
+        action_taking_reward = np.abs(action) *0.5
+        consecutive_action_reward = 0
+
+        # If the action is the same as the last 6 actions the agent gets a reward
+
+        if len(self.action_list) > 6:
+            if np.all(self.action_list[-6:] == action):
+                consecutive_action_reward = 1 *10
+
+        income_reward = self.calculate_earnings(action, price)
+
+        rewards = soc_reward + action_taking_reward + income_reward + consecutive_action_reward
+
+
+        # Calculate reward/earnings
+        # Different reward functions can be used
+        # Option 1: Reward is just the earnings of the current period
+        # reward = self.calculate_reward(price, action)
+        # Option 2: Reward is the cumulative earnings
+        #reward = self.calculate_reward_cumulative(price, action)
+        # Option 3: Reward is earnings + SOC (penalize low SOC as it corresponds to no action) *lambda_SOC
+        # General Idea:
+        # Incentivice the model to charge the battery and compensate for costs of charging
+        # Incentivice the model to hold the current SOC
+        rewards = self.calculate_earnings(action, price) + self.SOC * 0.25+ np.abs(action) *0.5
+        # Option 4: Reward is earnings + SOC (penalize low SOC as it corresponds to no action) *lambda_SOC + action * lambda_action
+        # rewards = self.calculate_earnings(action, price) + self.SOC * 0.01 + np.abs(action) * 0.01 + action * 0.01
+        # Max reward possible: self.SOC = 96, action = 14,4, Energy Arbitrage: 0,15*14= 2,1 If we fully discharge the battery twice per day
+
+        # Log to wandb
+        if self.wandb_log:
+            self.wandb_run.log({"reward": rewards,
+                                "action": action,
+                                "price": price,
+                                "SOC": self.SOC,
+                                "action_valid": float(self.action_valid[-1]),
+                                "total_earnings": self.TOTAL_EARNINGS,
+                                "monthly_earnings": np.mean(self.ROLLING_EARNINGS[-672:]),
+                                "monthly_earnings (daily average)": np.mean(self.ROLLING_EARNINGS[-672:])*(24*4),
+                                "action_taking_reward": action_taking_reward,
+                                "income_reward": income_reward,
+                                "consecutive_action_reward": consecutive_action_reward,
+                                "soc_reward": soc_reward
+                                })
+        # Check if reward is a numpy array
+
+        if isinstance(rewards, np.ndarray):
+            rewards = rewards.ravel()
+            rewards = rewards[0]
+
+        if isinstance(rewards, np.ndarray):
+            rewards = rewards[0]
+        # Saves time of day (For pretraining with non sb3-models)
+        #self.tod = next_state[-3]
+        if self.n_steps == self.max_steps:
+            done = True
+
+
+        return next_state, rewards, done, {}
+
+    def charge(self, rel_amount):
+        """
+        (Un-) Charge the Battery
+        Args:
+            rel_amount: Percentage of Battery to Charge, Uncharges if negative
+
+        Returns:
+            Current SOC (State of Charge)
+        """
+        self.SOC += rel_amount * self.TOTAL_STORAGE_CAPACITY
+        self.SOC = np.clip(self.SOC, self.min_SOC, self.max_SOC)
+        return self.SOC
+
+    def calculate_earnings(self, rel_amount, price):
+        """
+        Calculates Earnings in the last episode
+        Args:
+            rel_amount: relative amount of power sold
+            price: price to sell
+
+        Returns:
+            Earnings/Reward
+        """
+
+        sold_amount = (-rel_amount) * self.TOTAL_STORAGE_CAPACITY
+        earnings = + sold_amount * price
+        self.TOTAL_EARNINGS += earnings
+        self.ROLLING_EARNINGS.append(earnings)
+
+        return earnings
+
+class RandomSamplePretrainingEnv(Environment):
+    """
+    An environment that provides original time series features with randomly sampled day_ahead and intraday prices.
+    The purpose of the environment is to make pretraining on scheduled strategies more robust to overfitting.
+    Instead of using the normal Data_Loader_np, this model therefore uses the RandomSampleDataLoader
+    """
+    def __init__(self, max_charge=0.15,
+                 total_storage_capacity=1,
+                 initial_charge=0.0,
+                 max_SOC=1,
+                 price_time_horizon=1.5,
+                 data_root_path="",
+                 time_interval="15min",
+                 wandb_run=None,
+                 n_past_timesteps=1,
+                 time_features=True,
+                 day_ahead_environment=False,
+                 prediction_output="action",
+                 max_steps = None
                  ):
         """
         Initialize the Environment
@@ -89,146 +342,23 @@ class Environment(core.Env):
         self.time_step = time_interval
         self.day_ahead_environment = day_ahead_environment
         self.price_time_horizon = price_time_horizon
-        self.data_loader = Data_Loader_np(price_time_horizon=price_time_horizon,
-                                          root_path=data_root_path,
-                                          time_interval=time_interval,
-                                          n_past_timesteps=n_past_timesteps,
-                                          time_features=time_features)
+        self.data_loader = RandomSampleDataLoader(price_time_horizon=price_time_horizon,
+                                                  root_path=data_root_path,
+                                                  time_interval=time_interval,
+                                                  n_past_timesteps=n_past_timesteps,
+                                                  time_features=time_features)
 
         features, _, _= self._get_next_state(np.array(0))
-        self.observation_space = spaces.Box(low= -100, high = 1000, shape=features.shape, dtype=np.float32)
-        self.reset()
-
-
-    def get_current_timestamp(self):
-        return self.data_loader.get_current_timestamp()
-
-    def reset(self):
-        """
-        Reset the Environment
-        Returns:
-            Environment (reseted)
-        """
-        self.SOC = self.initial_charge
-        self.TOTAL_EARNINGS = 0
-        self.ROLLING_EARNINGS = []
-        self.action_valid = []
-        self.data_loader.reset()
-        # super().reset()
-        return self.step(np.array(0))[0]
-
-    def _get_next_state(self, action):
-        """
-        Get the next state of the Environment consisting of the SOC, day_ahead-action and the price
-        Args:
-            action: action to perform (hold, charge, discharge)
-        Returns:
-            next state, price, done
-        """
-
-        self.SOC = self.charge(action)
-        if self.day_ahead_environment:
-            features, done = self.data_loader.get_next_day_ahead_price()
-            intra_day_price, done= self.data_loader.get_next_intraday_price()
-            price = intra_day_price[0]
+        self.observation_space = spaces.Box(low=-100, high=1000, shape=(features.shape[0] - 2,), dtype=np.float32)
+        if max_steps is None:
+            self.max_steps = 99999999999999
         else:
-            features, price, done = self.data_loader.get_next_day_ahead_and_intraday_price()
-
-        up_max_charge = np.min([self.max_SOC - self.SOC, self.max_charge])
-        down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])
-
-        features = np.hstack([self.SOC, features,  down_max_charge+1e-5, up_max_charge-1e-5])
-
-        #features = np.hstack([self.SOC, features])
-        #features = np.array([features, np.array((down_max_charge, up_max_charge))])
-        return (
-            features,
-            price,
-            done
-        )
-
+            self.max_steps = max_steps
+        self.n_steps = 0
+        self.reset()
     def step(self, action):
-        """
-        Perform a (15min) step in the Environment
-        Args:
-            action: action to perform (hold, charge, discharge)
-
-        Returns:
-            next state, reward, done, info
-        """
-        # err_msg = f"{action!r} ({type(action)}) invalid"
-        # assert self.action_space.contains(action), err_msg
-        # assert self.state is not None, "Call reset before using step method."
-        if self.prediction_output == "nextSOC":
-            action = action - self.SOC # action is now the difference of nextSOC to the current SOC
-        elif self.prediction_output == "percentage_action":
-            action = (action-0.5) * self.max_charge
-        epsilon = 1e-1
-        # Clip action into a valid space
-        valid = (np.abs(action) <= self.max_charge + epsilon) & (0 <= action + self.SOC + epsilon) & (action + self.SOC <= self.TOTAL_STORAGE_CAPACITY + epsilon)
-        self.action_valid.append(float(valid))
-        # Reduce action to max_charge (maximum charge/discharge rate per period)
-        action = np.clip(action, -self.max_charge, self.max_charge)
-        # Clip action into the valid space
-        # #(must not be smaller than current SOC, must not be larger than the difference
-        # between maximum SOC and current SOC)
-        action = np.clip(action, -self.SOC, self.max_SOC - self.SOC)
-        # Calculate next state
-        next_state, price, done = self._get_next_state(action)
-        # Calculate reward/earnings
-        rewards = self.calculate_earnings(action, price)
-        # Log to wandb
-        if self.wandb_log:
-            self.wandb_run.log({"reward": rewards,
-                                "action": action,
-                                "price": price,
-                                "SOC": self.SOC,
-                                "action_valid": float(self.action_valid[-1]),
-                                "total_earnings": self.TOTAL_EARNINGS,
-                                "monthly_earnings": np.mean(self.ROLLING_EARNINGS[-672:]),
-                                "monthly_earnings (daily average)": np.mean(self.ROLLING_EARNINGS[-672:])*(24*4)
-
-                                })
-        # Check if reward is a numpy array
-
-        if isinstance(rewards, np.ndarray):
-            rewards = rewards.ravel()
-            rewards = rewards[0]
-
-        if isinstance(rewards, np.ndarray):
-            rewards = rewards[0]
-        return next_state, rewards, done, {}
-
-    def charge(self, rel_amount):
-        """
-        (Un-) Charge the Battery
-        Args:
-            rel_amount: Percentage of Battery to Charge, Uncharges if negative
-
-        Returns:
-            Current SOC (State of Charge)
-        """
-        self.SOC += rel_amount * self.TOTAL_STORAGE_CAPACITY
-        self.SOC = np.clip(self.SOC, self.min_SOC, self.max_SOC)
-        return self.SOC
-
-    def calculate_earnings(self, rel_amount, price):
-        """
-        Calculates Earnings in the last episode
-        Args:
-            rel_amount: relative amount of power sold
-            price: price to sell
-
-        Returns:
-            Earnings/Reward
-        """
-
-        sold_amount = (-rel_amount) * self.TOTAL_STORAGE_CAPACITY
-        earnings = + sold_amount * price
-        self.TOTAL_EARNINGS += earnings
-        self.ROLLING_EARNINGS.append(earnings)
-
-        return earnings
+        next_state, rewards, done, _ = super(RandomSamplePretrainingEnv, self).step(action)
+        return next_state[:-2], rewards, done, _
 
 class DiscreteEnvironment(Environment):
     """
@@ -300,7 +430,8 @@ class DiscreteEnvironment(Environment):
 
 
 if __name__ == "__main__":
-    env = Environment(data_root_path="../../")
+    env = RandomSamplePretrainingEnv(data_root_path="../../")
+    #env = Environment(data_root_path="../../")
     env.reset()
     while True:
         action = (np.random.random(1) - 0.5) * 0.3
