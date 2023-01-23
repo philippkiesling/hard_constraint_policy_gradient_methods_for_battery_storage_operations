@@ -41,7 +41,7 @@ env:
   initial_charge: 0.0
   max_SOC: 1
   price_time_horizon: 1.5
-  data_root_path: ""
+  data_root_path: ".."
   time_interval: "15min"
   n_past_timesteps: 4 # 24/4 timesteps corresponds to 6 hours of historic data as input
   time_features: True

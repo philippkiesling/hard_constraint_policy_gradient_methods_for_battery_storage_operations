@@ -46,14 +46,16 @@ class Environment(core.Env):
                  initial_charge=0.0,
                  max_SOC=1,
                  price_time_horizon=1.5,
-                 data_root_path="",
+                 data_root_path="..",
                  time_interval="15min",
                  wandb_run=None,
                  n_past_timesteps=1,
                  time_features=True,
                  day_ahead_environment=False,
                  prediction_output="action",
-                 max_steps = None
+                 max_steps=None,
+                 reward_shaping = None,
+                 headless=False,
                  ):
         """
         Initialize the Environment
@@ -64,12 +66,16 @@ class Environment(core.Env):
             max_SOC: Maximum SOC of the Battery
         """
         # Initialize the wandb run (if wandb is used)
+        self.headless = headless
         if not (wandb_run is None):
             self.wandb_log = True
             self.wandb_run = wandb_run
         else:
             self.wandb_log = False
-
+        #import pygame
+        self.headless = headless
+        #if headless:
+        #    pygame.display.set_mode((1, 1), pygame.NOFRAME)
         # Initialize Environment
         self.SOC = initial_charge
         self.initial_charge = initial_charge
@@ -105,10 +111,44 @@ class Environment(core.Env):
             self.max_steps = 99999999999999
         else:
             self.max_steps = max_steps
+        self.setup_reward_schedule(reward_shaping)
+
         self.n_steps = 0
         self.reset()
 
+    def setup_reward_schedule(self, reward_schedule):
 
+        schedule_type = reward_schedule["type"]
+        if schedule_type is None or schedule_type == "constant":
+            get_soc_reward_weight = lambda iteration: reward_schedule["base_soc_reward"]
+            get_action_taking_reward_weight = lambda iteration: reward_schedule["base_action_taking_reward"]
+            get_consecutive_action_reward_weight = lambda iteration: reward_schedule["base_consecutive_action_reward"]
+            get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"]
+        elif schedule_type == "linear":
+            get_soc_reward_weight = lambda iteration: reward_schedule["base_soc_reward"] * (self.max_steps - iteration) / self.max_steps
+            get_action_taking_reward_weight = lambda iteration: reward_schedule["base_action_taking_reward"] * (self.max_steps - iteration) / self.max_steps
+            get_consecutive_action_reward_weight = lambda iteration: reward_schedule["base_consecutive_action_reward"] * (self.max_steps - iteration) / self.max_steps
+            get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"] * iteration / self.max_steps
+        elif schedule_type == "exponential":
+            get_soc_reward_weight = lambda iteration: reward_schedule["base_soc_reward"] * np.exp(-iteration / reward_schedule["decay"])
+            get_action_taking_reward_weight = lambda iteration: reward_schedule["base_action_taking_reward"] * np.exp(-iteration / reward_schedule["decay"])
+            get_consecutive_action_reward_weight = lambda iteration: reward_schedule["base_consecutive_action_reward"] * np.exp(-iteration / reward_schedule["decay"])
+            get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"] * np.exp(iteration / reward_schedule["decay"])
+        elif schedule_type == "cosine":
+            get_soc_reward_weight = lambda iteration: reward_schedule["base_soc_reward"] * np.cos(iteration / self.max_steps * np.pi)
+            get_action_taking_reward_weight = lambda iteration: reward_schedule["base_action_taking_reward"] * np.cos(iteration / self.max_steps * np.pi)
+            get_consecutive_action_reward_weight = lambda iteration: reward_schedule["base_consecutive_action_reward"] * np.cos(iteration / self.max_steps * np.pi)
+            # The income reward increases linearly
+            get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"] * iteration / self.max_steps
+
+        else:
+            raise ValueError("Unknown reward schedule type {}".format(schedule_type))
+
+        self.get_soc_reward_weight = get_soc_reward_weight
+        self.get_action_taking_reward_weight = get_action_taking_reward_weight
+        self.get_consecutive_action_reward_weight = get_consecutive_action_reward_weight
+        self.get_income_reward_weight = get_income_reward_weight
+        return get_soc_reward_weight, get_action_taking_reward_weight, get_consecutive_action_reward_weight, get_income_reward_weight
 
     def get_current_timestamp(self):
         return self.data_loader.get_current_timestamp()
@@ -126,7 +166,7 @@ class Environment(core.Env):
         self.data_loader.reset()
         # super().reset()
         self.n_steps = 0
-        return self.step(np.array(0))[0]
+        return self.step(np.array([0]))[0]
 
     def _get_next_state(self, action):
         """
@@ -148,7 +188,7 @@ class Environment(core.Env):
         up_max_charge = np.min([self.max_SOC - self.SOC, self.max_charge])
         down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])
 
-        features = np.hstack([self.SOC, features])
+        #features = np.hstack([self.SOC, features])
         features = np.hstack([self.SOC, features,  down_max_charge, up_max_charge])
 
         self.set_bounds(down_max_charge, up_max_charge)
@@ -159,8 +199,9 @@ class Environment(core.Env):
             price,
             done
         )
+
     def set_bounds(self, down_max_charge, up_max_charge):
-        self.bounds = torch.Tensor([down_max_charge]), torch.Tensor([up_max_charge])
+        self.bounds = torch.Tensor(np.array([down_max_charge])), torch.Tensor(np.array([up_max_charge]))
 
     def step(self, action):
         """
@@ -193,32 +234,26 @@ class Environment(core.Env):
         # Calculate next state
         next_state, price, done = self._get_next_state(action)
 
-        soc_reward = self.SOC * 0.25
-        action_taking_reward = np.abs(action) *0.5
-        consecutive_action_reward = 0
-
-        # If the action is the same as the last 6 actions the agent gets a reward
-
-        if len(self.action_list) > 6:
-            if np.all(self.action_list[-6:] == action):
-                consecutive_action_reward = 1 *10
-
+        # Calculate non income rewards
+        soc_reward, action_taking_reward, consecutive_action_reward = self.calculate_shaping_rewards(action, price)
+        # Calculate reward weights
+        soc_reward_weight, action_taking_reward_weight, consecutive_action_reward_weight = self.calculate_reward_weights()
         income_reward = self.calculate_earnings(action, price)
-
-        rewards = soc_reward + action_taking_reward + income_reward + consecutive_action_reward
-
 
         # Calculate reward/earnings
         # Different reward functions can be used
-        # Option 1: Reward is just the earnings of the current period
-        # reward = self.calculate_reward(price, action)
+        rewards = soc_reward * soc_reward_weight + \
+                  action_taking_reward * action_taking_reward_weight + \
+                  income_reward  + consecutive_action_reward * consecutive_action_reward_weight
+
+
         # Option 2: Reward is the cumulative earnings
         #reward = self.calculate_reward_cumulative(price, action)
         # Option 3: Reward is earnings + SOC (penalize low SOC as it corresponds to no action) *lambda_SOC
         # General Idea:
         # Incentivice the model to charge the battery and compensate for costs of charging
         # Incentivice the model to hold the current SOC
-        rewards = self.calculate_earnings(action, price) + self.SOC * 0.25+ np.abs(action) *0.5
+        #rewards = self.calculate_earnings(action, price) + self.SOC * 0.25+ np.abs(action) *0.5
         # Option 4: Reward is earnings + SOC (penalize low SOC as it corresponds to no action) *lambda_SOC + action * lambda_action
         # rewards = self.calculate_earnings(action, price) + self.SOC * 0.01 + np.abs(action) * 0.01 + action * 0.01
         # Max reward possible: self.SOC = 96, action = 14,4, Energy Arbitrage: 0,15*14= 2,1 If we fully discharge the battery twice per day
@@ -236,7 +271,10 @@ class Environment(core.Env):
                                 "action_taking_reward": action_taking_reward,
                                 "income_reward": income_reward,
                                 "consecutive_action_reward": consecutive_action_reward,
-                                "soc_reward": soc_reward
+                                "soc_reward": soc_reward,
+                                "action_taking_reward_weight": action_taking_reward_weight,
+                                "consecutive_action_reward_weight": consecutive_action_reward_weight,
+                                "soc_reward_weight": soc_reward_weight,
                                 })
         # Check if reward is a numpy array
 
@@ -253,6 +291,30 @@ class Environment(core.Env):
 
 
         return next_state, rewards, done, {}
+
+    def calculate_reward_weights(self):
+        soc_reward_weight = self.get_soc_reward_weight(self.n_steps)
+        action_taking_reward_weight = self.get_action_taking_reward_weight(self.n_steps)
+        consecutive_action_reward_weight = self.get_consecutive_action_reward_weight(self.n_steps)
+
+        return soc_reward_weight, action_taking_reward_weight, consecutive_action_reward_weight
+
+    def calculate_shaping_rewards(self, action, price):
+        soc_reward = self.SOC
+        action_taking_reward = np.abs(action)
+        consecutive_action_reward = 0
+
+        # If the action is the same as the last 6 actions the agent gets a reward
+
+        if len(self.action_list) > 4:
+            if np.all(np.round(self.action_list[-7:], 2) == np.round(action, 2)):
+                consecutive_action_reward = 0
+            elif np.all(np.round(self.action_list[-3:],2) == np.round(action, 2)):
+                consecutive_action_reward = 1 * 3
+            # Dont give the reward if the same action was taken more than 6 times
+        self.action_list.append(action)
+
+        return soc_reward, action_taking_reward, consecutive_action_reward
 
     def charge(self, rel_amount):
         """
@@ -296,7 +358,7 @@ class RandomSamplePretrainingEnv(Environment):
                  initial_charge=0.0,
                  max_SOC=1,
                  price_time_horizon=1.5,
-                 data_root_path="",
+                 data_root_path="..",
                  time_interval="15min",
                  wandb_run=None,
                  n_past_timesteps=1,
@@ -370,7 +432,7 @@ class DiscreteEnvironment(Environment):
                  initial_charge=0.0,
                  max_SOC=1,
                  price_time_horizon=1.5,
-                 data_root_path="",
+                 data_root_path="..",
                  time_interval="15min",
                  wandb_run=None,
                  n_past_timesteps=1,

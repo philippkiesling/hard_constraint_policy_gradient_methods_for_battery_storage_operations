@@ -1,11 +1,19 @@
+"""
+IMplementation of ARS with custom policies, not finished yet
+"""
+
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
-from batterytrading.ppo import get_config, ValidOutputBaseActorCriticPolicy, LinearProjectedActorCriticPolicy
+from batterytrading.ppo import get_config
+# MLP
+from batterytrading.policies import ClampedActorCriticPolicy, LinearProjectedActorCriticPolicy
+# RNN
+from batterytrading.policies import ClampedMlpLstmPolicy, LinearProjectedMlpLstmPolicy
 from sb3_contrib import ARS
 from batterytrading.environment import Environment
 
 # Get Conifguration
-model_cfg, train_cfg = get_config("./batterytrading/ars/cfg.yml")
+model_cfg, train_cfg = get_config("./ars/cfg.yml")
 
 
 policy_type = model_cfg.pop("policy_type")

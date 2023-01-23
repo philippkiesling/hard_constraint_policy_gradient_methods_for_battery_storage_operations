@@ -2,13 +2,14 @@ from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
 from batterytrading.policies import LinearProjectedActorCriticPolicy, \
     ClampedMlpLstmPolicy, \
-    ClampedActorCriticPolicy, LinearProjectedMlpLstmPolicy
+    ClampedActorCriticPolicy, \
+    LinearProjectedMlpLstmPolicy, \
+    ActivationFunctionProjectedMlpLstmPolicy
 from batterytrading.ppo import get_config
-
 #from batterytrading.ppo.policies import
 
 # Get Conifguration
-model_cfg, train_cfg = get_config("./batterytrading/ppo/cfg.yml")
+model_cfg, train_cfg = get_config("./ppo/cfg.yml")
 
 
 
@@ -31,7 +32,11 @@ elif policy_type == "LinearProjectedMlpPolicy":
 elif policy_type == "ClampedMlpLstmPolicy":
     model_cfg["policy"] = ClampedMlpLstmPolicy
     model = RecurrentPPO(**model_cfg)
-    print(">>>>>>>> Using LinearProjectedMlpLstm-PPO <<<<<<<<")
+    print(">>>>>>>> Using ClampedMlpLstmPolicy-PPO <<<<<<<<")
+elif policy_type == "ActivationFunctionProjectedMlpLstmPolicy":
+    model_cfg["policy"] = ActivationFunctionProjectedMlpLstmPolicy
+    model = RecurrentPPO(**model_cfg)
+    print(">>>>>>>> Using ActivationFunctionProjectedMlpLstmPolicy-PPO <<<<<<<<")
 elif policy_type == "LinearProjectedMlpLstmPolicy":
     model_cfg["policy"] = LinearProjectedMlpLstmPolicy
     model = RecurrentPPO(**model_cfg)
@@ -48,14 +53,10 @@ model.learn(
 """
 env = model_cfg["env"]
 done = False
-obs = env.reset()
-reward_sum = 0
-reward_ls = []
-action_ls = []
-obs_ls = []
-import numpy as np
-import matplotlib.pyplot as plt
+model.eval_env = env
+
 while not done:  # noqa: E712
+
     action, _states = model.predict(obs)
     action = action[0]
     obs, rewards, done, info = env.step(action)

@@ -12,7 +12,9 @@ from stable_baselines3.common.torch_layers import (
 from batterytrading.policies.mapping_functions import map_action_to_valid_space_cvxpy_layer, \
     construct_cvxpy_optimization_layer, \
     map_action_to_valid_space_clamp, \
-    construct_optimization_layer_dummy
+    construct_optimization_layer_dummy, \
+    map_action_to_valid_space_activationfn, \
+    map_action_to_valid_space_activationtanh
 from abc import abstractmethod, ABC
 import gym
 from sb3_contrib.ppo_recurrent.policies import MlpLstmPolicy, MultiInputLstmPolicy
@@ -47,7 +49,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         enable_critic_lstm: bool = True,
         lstm_kwargs: Optional[Dict[str, Any]] = None,
         pretrain=None,
-        bounds = (0,0),
+        bounds=(0,0),
         env_reference = None
     ):
         bounds = bounds
@@ -78,8 +80,8 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         self.env_reference = env_reference
         self.low = bounds[0]
         self.high = bounds[1]
+
         self.observation_space = gym.spaces.Box(low=-100, high=1000, shape=(self.features_dim,))
-        self.init_mapping_layer()
         if pretrain is not None:
             #self.load_state_dict(torch.load(pretrain))
             #self.pretrain_mlp_extractor(**pretrain)
@@ -89,10 +91,8 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
             self.mlp_extractor = pretrained_model.mlp_extractor
             self.features_extractor = pretrained_model.features_extractor
         self.standard_forward = super(ValidOutputBaseRecurrentActorCriticPolicy, self).forward
-        self.projection_layer = self.construct_optimization_layer()
-
+        self.projection_layer = self.construct_optimization_layer(self)
         # Overwrite the default feature dimensions of the LSTM
-
 
         self.lstm_kwargs = lstm_kwargs if lstm_kwargs is not None else {}
         self.shared_lstm = shared_lstm
@@ -129,6 +129,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
+        self.n_steps = 0
 
     def construct_optimization_layer(self):
         """
@@ -137,9 +138,6 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
             torch.layer
         """
         raise NotImplementedError
-
-    def init_mapping_layer(self):
-        pass
 
     def map_action_to_valid_space(self, action, clamp_params):
         pass
@@ -225,7 +223,9 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         bounds = self.env_reference.bounds
 
         actions, values, log_prob, lstm_states = self.standard_forward(obs, lstm_states, episode_starts, deterministic=False)
-
+        if not deterministic:
+            self.n_steps += 1
+        #if self.n_steps > 50000:
         actions = self.map_action_to_valid_space(self, actions, bounds)
         return actions, values, log_prob, lstm_states
 
@@ -332,3 +332,10 @@ class LinearProjectedMlpLstmPolicy(ValidOutputBaseRecurrentActorCriticPolicy):
         self.map_action_to_valid_space = map_action_to_valid_space_cvxpy_layer
         self.construct_optimization_layer = construct_cvxpy_optimization_layer
         super(LinearProjectedMlpLstmPolicy, self).__init__(*args, **kwargs)
+        
+class ActivationFunctionProjectedMlpLstmPolicy(ValidOutputBaseRecurrentActorCriticPolicy):
+    def __init__(self, *args, **kwargs):
+        self.map_action_to_valid_space = map_action_to_valid_space_activationtanh
+        self.construct_optimization_layer = construct_optimization_layer_dummy
+
+        super(ActivationFunctionProjectedMlpLstmPolicy, self).__init__(*args, **kwargs)
