@@ -4,11 +4,12 @@ model:
   clip_range: 0.2 # 0.25
   clip_range_vf: 0.2
   ent_coef: 0.01 # 0.05-0.01 0.005
-  #("env", "Pendulum-v1"),
+  vf_coef: 0.5
+  proj_coef: 5  #("env", "Pendulum-v1"),
   env: BatteryStorageEnv
   gae_lambda: 0.95
   gamma: 0.99 # 0.99
-  learning_rate: 'cosine'
+  learning_rate: 'cosine' # schedule of the learning rate (can be cosine, linear, constant)
   lr_base: 2e-4
   max_grad_norm: 0.5
   n_epochs: 10
@@ -18,15 +19,14 @@ model:
   #policy: 'linearprojected'
   #policy: 'clampedlstm'
   #policy: 'clampedmlp'
-  #policy: 'linearprojectedlstm'
-  policy: ActivationFunctionProjectedMlpLstmPolicy
+  policy: 'linearprojectedlstm'
+  #policy: ActivationFunctionProjectedMlpLstmPolicy
   normalize_advantage: True
-  sde_sample_freq: -1
-  use_sde: False
-  vf_coef: 0.5
+  sde_sample_freq: -1 # Should be switched for basic functionalities
+  use_sde: False  # Should be switched for basic functionalities
   tensorboard_log: .log/log_tb/
   verbose: 1
-  target_kl:  #0.8 # Higher Value? because Early Stopping kicks in?
+  target_kl:  # Should usually be switched off (Switch on in case of exploding gradients that cannot be clipped properly with clip_range )
   device: 'cpu' #mps does not work
   create_eval_env: False
   policy_kwargs:
@@ -66,20 +66,20 @@ env:
     clipaction: True
     normalizeobservation: True
     normalizereward: True
-    transformobservation: True
+    transformobservation: False
     transformreward: True
   reward_shaping:
-    type: "cosine"
+    type: "linear"
     base_soc_reward: 0.6
     base_action_taking_reward: 2
     base_consecutive_action_reward: 0.0
     base_income_reward: 1.0
-  n_envs: 1
+  n_envs: 5
 wandb:
   use_wandb: True
   project: "batterytrading"
   #entity: "batterytrading"
-  name: "lstmTANH_constraint_multiply0.001"
+  name: "LinearprojectedwithProjloss30"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/modelNormalizeObservationPartiallys

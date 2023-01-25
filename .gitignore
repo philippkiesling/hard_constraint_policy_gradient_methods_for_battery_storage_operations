@@ -138,3 +138,4 @@ data/
 /wandb/
 /batterytrading/models/
 ./wandb
+/batterytrading/wandb

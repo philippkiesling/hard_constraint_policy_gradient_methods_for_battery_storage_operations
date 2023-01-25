@@ -1,11 +1,13 @@
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
-from batterytrading.policies import LinearProjectedActorCriticPolicy, \
-    ClampedMlpLstmPolicy, \
-    ClampedActorCriticPolicy, \
-    LinearProjectedMlpLstmPolicy, \
-    ActivationFunctionProjectedMlpLstmPolicy
-from batterytrading.ppo import get_config
+from batterytrading.ppo import RecurrentPPOHardConstraints
+#from batterytrading.policies import LinearProjectedActorCriticPolicy, \
+#    ClampedMlpLstmPolicy, \
+#    ClampedActorCriticPolicy, \
+#    LinearProjectedMlpLstmPolicy, \
+#    ActivationFunctionProjectedMlpLstmPolicy
+from batterytrading.policies.recurrent_policies_dict import ClampedMlpLstmPolicy, LinearProjectedMlpLstmPolicy
+from batterytrading.ppo.model_setup_dict import get_config
 #from batterytrading.ppo.policies import
 
 # Get Conifguration
@@ -31,15 +33,15 @@ elif policy_type == "LinearProjectedMlpPolicy":
     print(">>>>>>>> Using LinearProjectedMlp-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpLstmPolicy":
     model_cfg["policy"] = ClampedMlpLstmPolicy
-    model = RecurrentPPO(**model_cfg)
+    model = RecurrentPPOHardConstraints(**model_cfg)
     print(">>>>>>>> Using ClampedMlpLstmPolicy-PPO <<<<<<<<")
 elif policy_type == "ActivationFunctionProjectedMlpLstmPolicy":
     model_cfg["policy"] = ActivationFunctionProjectedMlpLstmPolicy
-    model = RecurrentPPO(**model_cfg)
+    model = RecurrentPPOHardConstraints(**model_cfg)
     print(">>>>>>>> Using ActivationFunctionProjectedMlpLstmPolicy-PPO <<<<<<<<")
 elif policy_type == "LinearProjectedMlpLstmPolicy":
     model_cfg["policy"] = LinearProjectedMlpLstmPolicy
-    model = RecurrentPPO(**model_cfg)
+    model = RecurrentPPOHardConstraints(**model_cfg)
     print(">>>>>>>> Using LinearProjectedMlpLstm-PPO <<<<<<<<")
 else:
     raise ValueError(f"Policy {policy_type} not implemented")
