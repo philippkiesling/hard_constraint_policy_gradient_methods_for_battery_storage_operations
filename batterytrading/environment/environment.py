@@ -183,7 +183,7 @@ class Environment(core.Env):
             intra_day_price, done= self.data_loader.get_next_intraday_price()
             price = intra_day_price[0]
         else:
-            features, price, done = self.data_loader.get_next_day_ahead_and_intraday_price()
+            features, price, done = self.data_loader.get_next_features()
 
         up_max_charge = np.min([self.max_SOC - self.SOC, self.max_charge])
         down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])

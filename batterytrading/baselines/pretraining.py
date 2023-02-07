@@ -119,7 +119,7 @@ if __name__ == "__main__":
         print("Sampling expert transitions.")
         rollouts = rollout.rollout(
             expert,
-            DummyVecEnv([lambda: RolloutInfoWrapper(pretrain_env)]),
+            pretrain_env,
             rollout.make_sample_until(min_timesteps=None, min_episodes=1),
             rng=rng,
         )

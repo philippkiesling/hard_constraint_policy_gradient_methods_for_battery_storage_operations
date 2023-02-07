@@ -5,7 +5,7 @@ from sys import gettrace as sys_get_trace
 
 import yaml
 from pathlib import Path
-from batterytrading.environment.environment_dict import Environment#, NormalizeObservationPartially, RandomSamplePretrainingEnv
+from batterytrading.environment.environment_dict import Environment, DiscreteEnvironment#, NormalizeObservationPartially, RandomSamplePretrainingEnv
 import wandb
 from wandb.integration.sb3 import WandbCallback
 import torch.nn as nn
@@ -14,9 +14,9 @@ import numpy as np
 from batterytrading.baselines import BaselineModel
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 from batterytrading.wrappers import NormalizeObservationDict
-
+from stable_baselines3.common.callbacks import EvalCallback
 from batterytrading.policies.torch_layers import CustomLSTMExtractor
-
+from sb3_contrib.common.maskable.evaluation import evaluate_policy as evaluate_maskable_policy
 
 def get_config(config_path):
     """
@@ -50,19 +50,20 @@ def get_config(config_path):
         wandb.save(config_path)
     else:
         run = None
-    n_envs = env_config["n_envs"]
     # create environment and add it to the model config
+    env_config["n_steps"] = model_config["n_steps"]
     if model_config["env"] == "BatteryStorageEnv":
         env_config["wandb_run"] = run
 
-        if env_config["n_envs"] <= 1:
+        if env_config["n_envs"] <= -1:
             # raise ValueError("Pretraining with multiple environments is not supported")
             env_config.pop("n_envs")
             env = _get_configured_envOLD(env_config)
         else:
             print(f"Training with multiple environments {env_config['n_envs']}")
             #env = _get_pretrained_env(env_config)
-            env = _get_configured_env(env_config)
+            env, eval_env = _get_configured_env(env_config)
+
         model_config["env"] = env
     if model_config["pretrain"] == True:
         model_config["pretrain_env"] = _get_pretrained_env(env_config)
@@ -94,6 +95,10 @@ def get_config(config_path):
 
     model_config["policy_kwargs"]["features_extractor_class"] = CustomLSTMExtractor
     model_config["policy_kwargs"]["features_extractor_kwargs"] = {'features': ["features"]}
+    # The Eval Callback is currently not working with invalid action masking
+    eval_callback = EvalCallback(eval_env, eval_freq=672, n_eval_episodes = 1,  warn=True, deterministic=True, render=False)
+    eval_callback.evaluate_policy = evaluate_maskable_policy
+    train_config["callback"] = eval_callback
     return model_config, train_config
 
 
@@ -121,31 +126,27 @@ def _resolve_policy(model_config, env_config):
         model_config["policy_type"] = "ActivationFunctionProjectedMlpLstmPolicy"
         lstm_kwargs = model_config["policy_kwargs"].pop("lstm_kwargs")
         #model_config["policy_kwargs"]["env_reference"] = model_config["env"]
-
         for key in lstm_kwargs:
             model_config["policy_kwargs"][key] = lstm_kwargs[key]
-        model_config["policy_kwargs"]
         model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
 
     elif "linearprojectedlstm" in policy:
         model_config["policy_type"] = "LinearProjectedMlpLstmPolicy"
         #model_config["policy_kwargs"]["env_reference"] = model_config["env"]
-
         lstm_kwargs = model_config["policy_kwargs"].pop("lstm_kwargs")
         for key in lstm_kwargs:
             model_config["policy_kwargs"][key] = lstm_kwargs[key]
-            model_config["policy_kwargs"]
             model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
+
     elif "lstm" in policy:
         model_config["policy_type"] = "MlpLstmPolicy"
         lstm_kwargs = model_config["policy_kwargs"].pop("lstm_kwargs")
+        #model_config.pop("proj_coef")
         for key in lstm_kwargs:
             model_config["policy_kwargs"][key] = lstm_kwargs[key]
-        model_config["policy_kwargs"]
 
     elif "clampedmlp" in policy:
         model_config["policy_type"] = "ClampedMlpPolicy"
-
         model_config["policy_kwargs"].pop("lstm_kwargs")
         model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
 
@@ -158,10 +159,12 @@ def _resolve_policy(model_config, env_config):
         model_config["policy_type"] = "LinearPolicy"
         model_config["policy_kwargs"].pop("lstm_kwargs")
         model_config["policy_kwargs"].pop("activation_fn")
+        model_config.pop("proj_coef")
 
     else:
         model_config["policy_type"] = "MlpPolicy"
         model_config["policy_kwargs"].pop("lstm_kwargs")
+        #model_config.pop("proj_coef")
 
     return model_config
 
@@ -212,7 +215,7 @@ def _get_configured_envOLD(env_config):
     if env_preprocessing is None:
         env_preprocessing = env_config.pop("preprocessing")
     #n_envs = env_config.pop("n_envs")
-    env = Environment(**env_config)
+    env = DiscreteEnvironment(**env_config)
     env_config["wandb_run"] = None
     # gym.wrappers FilterObservation
     # returns dictionaries as observations
@@ -237,6 +240,10 @@ def _get_configured_envOLD(env_config):
     if env_preprocessing["transformreward"]:
         # env = gym.wrappers.TransformReward(env, lambda x: x.flatten())
         env = gym.wrappers.TransformReward(env, lambda x: np.clip(x, -10, 10))
+    if True:
+        # IMport action Masker
+        from sb3_contrib.common.wrappers import ActionMasker
+        env = ActionMasker(env, action_mask_fn= lambda x: x)
 
     return env
 
@@ -250,11 +257,29 @@ def _get_configured_env(env_config):
         env (object): environment
     """
     n_envs = env_config.pop("n_envs")
-    envs = [make_env(env_config.copy(), i) for i in range(n_envs)]
-    envs = [make_env(env_config.copy(), i) for i in range(n_envs)]
+    n_steps = env_config.pop("n_steps")
+    #envs = [make_env(env_config.copy(), i) for i in range(1, 1 + n_envs)]
+    envs = [make_env(env_config.copy(), i) for i in range(0,  n_envs)]
     #envs = [gym.make('CartPole-v1') for i in range(n_envs)]
-    vec_env = DummyVecEnv(envs)
-    return vec_env
+    #vec_env = DummyVecEnv(envs)
+
+
+    # In case of macos, we need to set the no_proxy environment variable to avoid a bug in the multiprocessing library
+    import os
+    os.environ['no_proxy'] = '*'
+    if n_envs >1:
+        #vec_env = SubprocVecEnv(envs, start_method='fork')
+        vec_env = DummyVecEnv(envs)
+    else:
+        vec_env = envs[0]()
+    #vec_env = SubprocVecEnv(envs, start_method='fork')
+    env_config["eval_env"] = True
+    env_config["n_steps"] = n_steps
+    env_config["gaussian_noise"] = False
+    env_config["noise_std"] = -1
+    eval_env = make_env(env_config.copy(), 0)
+    eval_env = eval_env()
+    return vec_env, eval_env
 
 def make_env(env_config, env_id):
 
@@ -277,7 +302,7 @@ def _get_configured_single_env(env_config, env_id):
     if env_id > 0:
         env_config["wandb_run"] = None
     env_preprocessing = env_config.pop("preprocessing")
-    env = Environment(**env_config)
+    env = DiscreteEnvironment(**env_config)
 
     if isinstance( env.observation_space, gym.spaces.Dict):
         dict_env = True
@@ -296,12 +321,22 @@ def _get_configured_single_env(env_config, env_id):
     if env_preprocessing["normalizereward"]:
         env = gym.wrappers.NormalizeReward(env)
     if env_preprocessing["transformobservation"]:
-        env = gym.wrappers.TransformObservation(env, lambda x: x.flatten())
-        # env = gym.wrappers.TransformObservation(env, lambda x: np.clip(x[0].flatten(), -10, 10))
+        env = gym.wrappers.TransformObservation(env,
+                                lambda x: {"features": x["features"].flatten(),
+                                           "action_bounds": x["action_bounds"]}
+                                                )
+        #env = gym.wrappers.TransformObservation(env,
+        #                        lambda x: x["features"].flatten(),
+        #                                   #"action_bounds": x["action_bounds"]
+
+        #                                        )        # env = gym.wrappers.TransformObservation(env, lambda x: np.clip(x[0].flatten(), -10, 10))
     if env_preprocessing["transformreward"]:
         # env = gym.wrappers.TransformReward(env, lambda x: x.flatten())
         env = gym.wrappers.TransformReward(env, lambda x: np.clip(x, -10, 10))
-
+    if True:
+        # IMport action Masker
+        from sb3_contrib.common.wrappers import ActionMasker
+        env = ActionMasker(env, action_mask_fn=lambda env: env.valid_action_mask())
 
     return env
 
@@ -350,7 +385,7 @@ def _setup_pretraining(pretrain_config, env_config):
         env = _get_configured_env(env_config)
         learnable_env_cfg = env_config.copy()
         # learnable_env_cfg["day_ahead_environment"] = True
-        learnable_env = Environment(**learnable_env_cfg)
+        learnable_env = DiscreteEnvironment(**learnable_env_cfg)
         pretrain_config["env"] = env
         pretrain_config["learnable_env"] = learnable_env
         teacher_policy = BaselineModel(learnable_env)

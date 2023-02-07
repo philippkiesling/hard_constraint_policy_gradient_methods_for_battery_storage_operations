@@ -49,8 +49,10 @@ def get_hourly_data(root_path=""):
     df_hour = df_hour.drop(["Day Ahead Auction (DE-LU)", "Day Ahead Auction (DE-AT-LU)"], axis=1)
     return df_hour
 
+def get_gaussian_noise(mean, std, size):
+    return np.random.normal(mean, std, size)
 
-def get_data(root_path="", time_interval = "15min")  -> pd.DataFrame:
+def get_data(root_path="", time_interval = "15min", gaussian_noise = False, noise_std = -1)  -> pd.DataFrame:
     """
     Get 15min and hourly data from csv.
     Interpolates hourly data to 15min data.
@@ -89,11 +91,21 @@ def get_data(root_path="", time_interval = "15min")  -> pd.DataFrame:
     if time_interval == "H":
         df = df.resample("H").mean()
         df["intraday_15min"] = df["intraday_15min"].interpolate("linear")
+    if gaussian_noise:
+        df["intraday_15min"] = df["intraday_15min"] + get_gaussian_noise(0, noise_std, df.shape[0])
+        df["day_ahead"] = df["day_ahead"] + get_gaussian_noise(0, noise_std, df.shape[0])
     return df
 
 
 class Data_Loader_np:
-    def __init__(self, price_time_horizon=1.5, data=None, root_path="", time_interval="15min", n_past_timesteps = 1, time_features = True):
+    def __init__(self, price_time_horizon=1.5,
+                 data=None,
+                 root_path="",
+                 time_interval="15min",
+                 n_past_timesteps = 1,
+                 time_features=True,
+                 gaussian_noise = False,
+                 noise_std = -1):
         """
         Initialize the Data Loader
         The returned intraday prices are historic and can therefore vary.
@@ -108,7 +120,7 @@ class Data_Loader_np:
             time_features: If True, time features are returned
 
         """
-        self.data = get_data(root_path=root_path, time_interval=time_interval)
+        self.data = get_data(root_path=root_path, time_interval=time_interval,  gaussian_noise = gaussian_noise, noise_std = noise_std)
         self.current_index = 0
         self.max_index = len(self.data) - 1
         self.time_interval = time_interval
@@ -133,7 +145,7 @@ class Data_Loader_np:
         # self.intraday_price[:] = np.NAN
         return self  #
 
-    def get_next_day_ahead_price(self, set_current_index=True):
+    def get_next_day_ahead_price(self, set_current_index=False):
         """
         Get the next day ahead price
         Returns:
@@ -141,10 +153,11 @@ class Data_Loader_np:
         """
         if set_current_index:
             self.current_index += 1
+        self.day_ahead_price = np.roll(self.day_ahead_price, -1)
+        self.day_ahead_price[-1] = np.NAN
         if self.current_index + (24 + 12) * 4 < self.max_index:
             # Rotate the day ahead price one step ahead and delete the last entry
-            self.day_ahead_price = np.roll(self.day_ahead_price, -1)
-            self.day_ahead_price[-1] = np.NAN
+
             if self.data.iloc[self.current_index].name.hour == 12 and self.data.iloc[self.current_index].name.minute == 0:
                 self.day_ahead_price[(12) * 4 :] = self.data.iloc[self.current_index + 12 * 4 : self.current_index + (24 + 12) * 4]["day_ahead"]
 
@@ -169,28 +182,45 @@ class Data_Loader_np:
 
     def _get_time_features(self):
         """
-        Get the current time of day
+        Get the current time of day as sine and cosine waves with different frequencies (daily, weekly, monthly, yearly)
         Returns:
-            time of day
-        """
+            time features as numpy array [daily_sine, daily_cosine, weekly_sine, weekly_cosine, monthly_sine, monthly_cosine, yearly_sine, yearly_cosine]
+
+                    """
         try:
-            np.sin((1/4))
-            current_tod = self.data.iloc[self.current_index].name.hour + self.data.iloc[self.current_index].name.minute/60
-            current_sin = np.sin((current_tod)/4)
-            current_cos = np.cos((current_tod)/4)
-            current_sin2 = np.sin((current_tod)/12)
-            current_cos2 = np.cos((current_tod)/12)
-            current_sin3 = np.sin((current_tod)/24)
-            current_cos3 = np.cos((current_tod)/24)
-            weekly_sin = np.sin((current_tod)/110)#
-            yearly_sin = np.sin((current_tod)/(110*4*12))#
-            return np.array([current_sin, current_cos, current_sin2, current_cos2, current_sin3, current_cos3]), False
-            #return np.array([current_sin, weekly_sin, yearly_sin]), False
-            #return np.float64(current_tod), False
+            time = self.current_index
+            daily_frequency = 2 * np.pi / (24 * 4)  # 4 times per hour = 4 * 24 = 96 times per day
+            weekly_frequency = 2 * np.pi / (168 * 4)  # 168 hours per week * 4 times per hour
+            monthly_frequency = 2 * np.pi / (720 * 4)  # 720 hours per month * 4 times per hour
+            yearly_frequency = 2 * np.pi / (8760 * 4)  # 8760 hours per year * 4 times per hour
+
+            # Compute the sine and cosine waves for each frequency
+            daily_sine = np.sin(daily_frequency * time)
+            daily_cosine = np.cos(daily_frequency * time)
+
+            weekly_sine = np.sin(weekly_frequency * time)
+            weekly_cosine = np.cos(weekly_frequency * time)
+
+            monthly_sine = np.sin(monthly_frequency * time)
+            monthly_cosine = np.cos(monthly_frequency * time)
+
+            yearly_sine = np.sin(yearly_frequency * time)
+            yearly_cosine = np.cos(yearly_frequency * time)
+
+            # Return the time features
+            return np.array([daily_sine,
+                             daily_cosine,
+                             weekly_sine,
+                             weekly_cosine,
+                             monthly_sine,
+                             monthly_cosine,
+                             yearly_sine,
+                             yearly_cosine]), False
+            #return np.array([current_sin, current_cos, current_sin2, current_cos2, current_sin3, current_cos3]), False
         except(IndexError):
             return None, True
 
-    def get_next_day_ahead_and_intraday_price(self):
+    def get_next_features(self):
         """
         Get the next day ahead and intraday price
         Returns:
@@ -198,17 +228,21 @@ class Data_Loader_np:
         """
         #self.current_index += 1
 
-
-        day_ahead_price, done_day_ahead = self.get_next_day_ahead_price()
-        intraday_price, done_intraday = self.get_next_intraday_price()
+        day_ahead_price, done_day_ahead = self.get_next_day_ahead_price(set_current_index=False)
+        intraday_price, done_intraday = self.get_next_intraday_price(set_current_index=False)
         time_features, done_time_features = self._get_time_features()
         #features = np.hstack([intraday_price[0], time_features])
+        day_ahead_price = day_ahead_price[[idx * 4 for idx in range(0,12)]]
+        #day_ahead_price = day_ahead_price[46:47]
+        day_ahead_price[np.isnan(day_ahead_price)] = 0.0
         if self.time_features:
-            features = np.hstack([intraday_price[0:self.n_past_timesteps], time_features ])
+            features = np.hstack([intraday_price[0:self.n_past_timesteps], day_ahead_price, time_features ])
         else:
-            features = np.hstack([intraday_price[0:self.n_past_timesteps]])
+            features = np.hstack([intraday_price[0:self.n_past_timesteps], day_ahead_price])
         price = intraday_price[0]
         done = done_day_ahead or done_intraday or done_time_features
+
+        self.current_index += 1
         return features, price, done
 
 class RandomSampleDataLoader(Data_Loader_np):
@@ -241,7 +275,7 @@ class RandomSampleDataLoader(Data_Loader_np):
         self.time_features = time_features
         # self.intraday_price[:] = np.NAN
 
-    def get_next_day_ahead_price(self, set_current_index=True):
+    def get_next_day_ahead_price(self, set_current_index=False):
         """
         Get the next day ahead price
         Returns:
@@ -275,14 +309,11 @@ class RandomSampleDataLoader(Data_Loader_np):
 
 
 if __name__ == "__main__":
-    data_loader = Data_Loader_np(time_interval="H")
+    data_loader = Data_Loader_np(time_interval="15min", root_path="../", gaussian_noise=True, noise_std=1)
     while True:
         (
-            day_ahead_price,
-            intraday_price,
-            time_features,
-            done,
-        ) = data_loader.get_next_day_ahead_and_intraday_price()
+            features, price, done
+        ) = data_loader.get_next_features()
         if done:
             break
         # print(day_ahead_price, intraday_price)

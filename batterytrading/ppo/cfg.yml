@@ -4,29 +4,28 @@ model:
   clip_range: 0.2 # 0.25
   clip_range_vf: 0.2
   ent_coef: 0.01 # 0.05-0.01 0.005
-  vf_coef: 0.5
-  proj_coef: 5  #("env", "Pendulum-v1"),
+  #("env", "Pendulum-v1"),
   env: BatteryStorageEnv
   gae_lambda: 0.95
   gamma: 0.99 # 0.99
   learning_rate: 'cosine' # schedule of the learning rate (can be cosine, linear, constant)
-  lr_base: 2e-4
+  lr_base: 1e-4
   max_grad_norm: 0.5
   n_epochs: 10
   n_steps: 672 # 96 # 24 (hour/day) * 4 (intervals/hour) * 7 (days/week) * 4 (weeks)
   #policy: 'MlpLstmPolicy'
-  #policy: 'MlpPolicy'
+  policy: 'MlpPolicy'
   #policy: 'linearprojected'
   #policy: 'clampedlstm'
   #policy: 'clampedmlp'
-  policy: 'linearprojectedlstm'
+  #policy: 'linearprojectedlstm'
   #policy: ActivationFunctionProjectedMlpLstmPolicy
   normalize_advantage: True
   sde_sample_freq: -1 # Should be switched for basic functionalities
   use_sde: False  # Should be switched for basic functionalities
   tensorboard_log: .log/log_tb/
   verbose: 1
-  target_kl:  # Should usually be switched off (Switch on in case of exploding gradients that cannot be clipped properly with clip_range )
+  target_kl:  #0.8 # Higher Value? because Early Stopping kicks in?
   device: 'cpu' #mps does not work
   create_eval_env: False
   policy_kwargs:
@@ -36,15 +35,15 @@ model:
     normalize_images: False
     lstm_kwargs:
       enable_critic_lstm: True
-      lstm_hidden_size: 16
-      n_lstm_layers: 3  # Not the Number of timesteps to keep in the memory
+      lstm_hidden_size: 64
+      n_lstm_layers: 4  # Not the Number of timesteps to keep in the memory
       lstm_kwargs:
         #use_attention: True
         #bidirectional: True
 
   pretrain: False
 train:
-  total_timesteps: 1250000 # We have: 250000, when we want to train with 5 envs we need 1250000 = 250000 * 5
+  total_timesteps: 2500000 # We have: 250000, when we want to train with 5 envs we need 1250000 = 250000 * 5
   eval_freq: 10
   log_interval: 1
 
@@ -56,30 +55,32 @@ env:
   price_time_horizon: 1.5
   data_root_path: "../"
   time_interval: "15min"
-  n_past_timesteps: 1 # 24/4 timesteps corresponds to 6 hours of historic data as input
+  n_past_timesteps: 15 # 24/4 timesteps corresponds to 6 hours of historic data as input
   time_features: True
   prediction_output: "action"
   day_ahead_environment: False
   max_steps: 250000
-  headless: True
   preprocessing:
-    clipaction: True
+    clipaction: False
     normalizeobservation: True
     normalizereward: True
-    transformobservation: False
+    transformobservation: True
     transformreward: True
   reward_shaping:
-    type: "linear"
+    type: "cosine"
     base_soc_reward: 0.6
     base_action_taking_reward: 2
     base_consecutive_action_reward: 0.0
     base_income_reward: 1.0
-  n_envs: 5
+    cumulative_coef: 0.0
+  n_envs: 10
+  gaussian_noise: False
+  noise_std: None
 wandb:
   use_wandb: True
   project: "batterytrading"
   #entity: "batterytrading"
-  name: "LinearprojectedwithProjloss30"
+  name: "EVAL_ENV_discrete_actions_multienvs_MLP_n_timesteps15"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/modelNormalizeObservationPartiallys

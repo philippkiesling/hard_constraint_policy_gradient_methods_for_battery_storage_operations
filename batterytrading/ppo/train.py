@@ -9,18 +9,26 @@ from batterytrading.ppo import RecurrentPPOHardConstraints
 from batterytrading.policies.recurrent_policies_dict import ClampedMlpLstmPolicy, LinearProjectedMlpLstmPolicy
 from batterytrading.ppo.model_setup_dict import get_config
 #from batterytrading.ppo.policies import
-
+from stable_baselines3.ppo import MultiInputPolicy
+from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy, MaskableMultiInputActorCriticPolicy
+from sb3_contrib import MaskablePPO
 # Get Conifguration
 model_cfg, train_cfg = get_config("./ppo/cfg.yml")
 
 
-
 policy_type = model_cfg.pop("policy_type")
 if policy_type == "MlpPolicy":
-    model = PPO( **model_cfg)
+    #model_cfg["policy"] = MultiInputPolicy
+    model_cfg["policy"] = MaskableMultiInputActorCriticPolicy
+    #model = PPO( **model_cfg)
+    model_cfg.pop("sde_sample_freq")
+    model_cfg.pop("use_sde")
+    model_cfg["policy_kwargs"].pop("log_std_init")
+    model = MaskablePPO(**model_cfg)
     print(">>>>>>>> Using  MLP-PPO<<<<<<<<")
 elif policy_type == "MlpLstmPolicy":
     #model_cfg["policy"] = "CnnLstmPolicy"
+    model_cfg["policy"] = "MlpLstmPolicy"
     model = RecurrentPPO(**model_cfg)
     print(">>>>>>>> Using Recurrent-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpPolicy":
@@ -28,7 +36,7 @@ elif policy_type == "ClampedMlpPolicy":
     model = PPO(**model_cfg)
     print(">>>>>>>> Using ClampedMlp-PPO <<<<<<<<")
 elif policy_type == "LinearProjectedMlpPolicy":
-    model_cfg["policy"] = LinearProjectedActorCriticPolicy
+    model_cfg["policy"] = "MLPActorCriticPolicy"
     model = PPO(**model_cfg)
     print(">>>>>>>> Using LinearProjectedMlp-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpLstmPolicy":

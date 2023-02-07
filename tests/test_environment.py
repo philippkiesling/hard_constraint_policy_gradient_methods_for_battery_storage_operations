@@ -40,7 +40,7 @@ class TestEnvironment(unittest.TestCase):
         done = False
         for i in range(2):
             while not done:
-                day_ahead_price, intraday_price, time_features, done = dataloader.get_next_day_ahead_and_intraday_price()
+                day_ahead_price, intraday_price, time_features, done = dataloader.get_next_features()
             dataloader.reset()
 
 

@@ -1,8 +1,17 @@
+import numpy as np
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.ppo.policies import ActorCriticPolicy
+from imitation.algorithms import bc
+from imitation.data import rollout
+from imitation.data.wrappers import RolloutInfoWrapper
+rng = np.random.default_rng(0)
+from batterytrading.ppo.model_setup_dict import get_config
 
-class BaselineModel():
+class BaselineModelPretraining():
     def __init__(self, env, policy_fn="schedule", n_lowest=35, n_highest=35):
         self.env = env
-        self.state, reward, done, info = env.step(0)
+        self.state, reward, done, info = env.step(np.array(0))
         self.max_SOC = self.env.max_SOC
         self.min_SOC = self.env.min_SOC
         self.max_charge = self.env.max_charge
@@ -26,22 +35,28 @@ class BaselineModel():
             self.new_policy_entries = 24 * 4
         self.n_lowest = n_lowest
         self.n_highest = n_highest
-
+        self.state, reward, done, info = self.env.step(0)
         self.policy = [0 for i in range(self.planning_horizon)]
         self.total_policy = []
         self.total_policy += self.policy
 
-    def train(self, total_timesteps = 10000):
+    def __call__(self, *args, **kwargs):
+        #print(*args)
+        current_action = self.policy.pop(0)
+        #self.state, reward, done, info = self.env.step(current_action)
+        if self.env.get_current_timestamp().hour == 12 and self.env.get_current_timestamp().minute == 15:
+            self.policy_fn()
+        #print(f"current action: {current_action}, length of policy: {len(self.policy)}, time: {self.env.get_current_timestamp()}")
+        return np.array([current_action])
+
+    def train(self, total_timesteps=10000):
         """
         if the first value of the environments state is not nan, find the new policy.
         This means, that we have a new (day_ahead) forecast available
 
         """
-        self.state, reward, done, info = self.env.step(0)
-        self.policy = [0 for i in range(self.planning_horizon)]
-        self.total_policy = []
-        self.total_policy += self.policy
         iteration = 0
+
         while not done and iteration < total_timesteps:
             current_action = self.policy.pop(0)
             self.state, reward, done, info = self.env.step(current_action)
@@ -49,26 +64,6 @@ class BaselineModel():
                 self.policy_fn()
             iteration += 1
         return self.total_policy
-
-    def predict_with_external_env(self, timestamp):
-
-        iteration = 0
-        if timestamp.hour == 12 and timestamp.minute == 15:
-            self.policy_fn()
-            iteration += 1
-
-        current_action = self.policy.pop(0)
-        self.state, reward, done, info = self.env.step(current_action)
-
-        return current_action
-
-
-    def get_optimal_policy(self):
-        """
-        Get the optimal policy for the current state by iterating over all possible sequences of actions
-        pass
-        """
-        pass
 
     def get_min_max_policy(self):
         """
@@ -112,22 +107,67 @@ class BaselineModel():
         self.policy += new_policy
         self.total_policy += new_policy
 
-if __name__ == '__main__':
-    from batterytrading.ppo import get_config
-    from batterytrading.environment import Environment
-    import numpy as np
+    def reset(self):
+        self.policy = [0 for i in range(self.planning_horizon)]
+        self.total_policy = []
+        self.total_policy += self.policy
 
-    # Get Conifguration
-    model_cfg, train_cfg = get_config("./batterytrading/baselines/cfg.yml")
+if __name__ == "__main__":
+    def sample_expert_transitions(pretrain_env):
+        expert = BaselineModelPretraining(pretrain_env)
 
-    n = 35
-    policy_iteration = BaselineModel(model_cfg["env"], policy_fn="min_max", n_lowest=n, n_highest=n)
-    policy_iteration.train(total_timesteps= train_cfg["total_timesteps"])
+        print("Sampling expert transitions.")
+        rollouts = rollout.rollout(
+            expert,
+            DummyVecEnv([lambda: RolloutInfoWrapper(pretrain_env) for i in range(0,3)]),
+            rollout.make_sample_until(min_timesteps=None, min_episodes=1),
+            rng=rng
+        )
+        return rollout.flatten_trajectories(rollouts)
 
-    """ 
-    for n in range(0,38, 1):
-        env = Environment(day_ahead_environment = True)
-        policy_iteration = TrivialModel(env,  policy_fn="min_max", n_lowest = n, n_highest= n)
-        policy_iteration.train(**train_cfg)
-        print(n, policy_iteration.env.TOTAL_EARNINGS)
-    """
+
+    model_cfg, train_cfg = get_config("./ppo/cfg.yml")
+
+    pretrain_env = model_cfg["env"]
+    env = train_cfg["callback"].eval_env
+    #pretrain_env.max_steps = 1000
+    env.max_steps = 10000
+    pretrain_env.max_steps = 200
+
+    schedule_lr = lambda f: f * 3e-4
+    transitions = sample_expert_transitions(pretrain_env)
+    model_cfg["policy_kwargs"]["observation_space"] = pretrain_env.observation_space
+    model_cfg["policy_kwargs"]["action_space"] = pretrain_env.action_space
+    model_cfg["policy_kwargs"]["lr_schedule"] = schedule_lr
+    model_cfg["policy_kwargs"].pop("pretrain")
+    model_cfg["policy_kwargs"].pop("bounds")
+
+    bc_trainer = bc.BC(
+    observation_space=pretrain_env.env.observation_space,
+    action_space=pretrain_env.env.action_space,
+    policy = ActorCriticPolicy(**model_cfg["policy_kwargs"]),
+    #policy = LinearProjectedActorCriticPolicy(**model_cfg["policy_kwargs"], ),
+    demonstrations=transitions,
+    rng=rng,
+    )
+
+reward, _ = evaluate_policy(
+    bc_trainer.policy,  # type: ignore[arg-type]
+    pretrain_env,
+    n_eval_episodes=3,
+    render=False,
+)
+
+print(f"Reward before training: {reward}")
+
+print("Training a policy using Behavior Cloning")
+bc_trainer.train(n_epochs=50)
+
+reward, _ = evaluate_policy(
+    bc_trainer.policy,  # type: ignore[arg-type]
+    pretrain_env,
+    n_eval_episodes=3,
+    render=False,
+)
+print(f"Reward after training: {reward}")
+bc_trainer.policy.save("./batterytrading/models/test_model")

@@ -9,6 +9,17 @@ from stable_baselines3.common.torch_layers import (
     BaseFeaturesExtractor,
     FlattenExtractor,
 )
+
+from stable_baselines3.common.distributions import (
+    BernoulliDistribution,
+    CategoricalDistribution,
+    DiagGaussianDistribution,
+    Distribution,
+    MultiCategoricalDistribution,
+    StateDependentNoiseDistribution,
+    make_proba_distribution,
+)
+#
 from batterytrading.policies.mapping_functions import map_action_to_valid_space_cvxpy_layer, \
     construct_cvxpy_optimization_layer, \
     map_action_to_valid_space_clamp, \
@@ -19,12 +30,51 @@ from abc import abstractmethod, ABC
 import gym
 from sb3_contrib.ppo_recurrent.policies import MlpLstmPolicy, MultiInputLstmPolicy
 from batterytrading.policies.torch_layers import CustomLSTMExtractor
-
+import torch as th
 class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
     """
-    An Actor Critic Policy that maps actions sampled from the normal distribution into the valid action space.
+    Recurrent policy class for actor-critic algorithms (has both policy and value prediction).
+    To be used with A2C, PPO and the likes.
+    It assumes that both the actor and the critic LSTM
+    have the same architecture.
 
+    :param observation_space: Observation space
+    :param action_space: Action space
+    :param lr_schedule: Learning rate schedule (could be constant)
+    :param net_arch: The specification of the policy and value networks.
+    :param activation_fn: Activation function
+    :param ortho_init: Whether to use or not orthogonal initialization
+    :param use_sde: Whether to use State Dependent Exploration or not
+    :param log_std_init: Initial value for the log standard deviation
+    :param full_std: Whether to use (n_features x n_actions) parameters
+        for the std instead of only (n_features,) when using gSDE
+    :param sde_net_arch: Network architecture for extracting features
+        when using gSDE. If None, the latent features from the policy will be used.
+        Pass an empty list to use the states as features.
+    :param use_expln: Use ``expln()`` function instead of ``exp()`` to ensure
+        a positive standard deviation (cf paper). It allows to keep variance
+        above zero and prevent it from growing too fast. In practice, ``exp()`` is usually enough.
+    :param squash_output: Whether to squash the output using a tanh function,
+        this allows to ensure boundaries when using gSDE.
+    :param features_extractor_class: Features extractor to use.
+    :param features_extractor_kwargs: Keyword arguments
+        to pass to the features extractor.
+    :param normalize_images: Whether to normalize images or not,
+         dividing by 255.0 (True by default)
+    :param optimizer_class: The optimizer to use,
+        ``th.optim.Adam`` by default
+    :param optimizer_kwargs: Additional keyword arguments,
+        excluding the learning rate, to pass to the optimizer
+    :param lstm_hidden_size: Number of hidden units for each LSTM layer.
+    :param n_lstm_layers: Number of LSTM layers.
+    :param shared_lstm: Whether the LSTM is shared between the actor and the critic
+        (in that case, only the actor gradient is used)
+        By default, the actor and the critic have two separate LSTM.
+    :param enable_critic_lstm: Use a seperate LSTM for the critic.
+    :param lstm_kwargs: Additional keyword arguments to pass the the LSTM
+        constructor.
     """
+
     def __init__(
         self,
         observation_space: gym.spaces.Space,
@@ -42,10 +92,10 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
         normalize_images: bool = True,
-        optimizer_class: Type[torch.optim.Optimizer] = torch.optim.Adam,
+        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         lstm_hidden_size: int = 256,
-        n_lstm_layers: int = 10,
+        n_lstm_layers: int = 1,
         shared_lstm: bool = False,
         enable_critic_lstm: bool = True,
         lstm_kwargs: Optional[Dict[str, Any]] = None,
@@ -56,52 +106,51 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         bounds = bounds
         features_extractor_class = CustomLSTMExtractor
         features_extractor_kwargs = {'features':["features"]}
-        super(ValidOutputBaseRecurrentActorCriticPolicy, self).__init__(
-        observation_space = observation_space,
-        action_space = action_space,
-        lr_schedule = lr_schedule,
-        net_arch = net_arch,
-        activation_fn = activation_fn,
-        ortho_init = ortho_init,
-        use_sde = use_sde,
-        log_std_init =log_std_init,
-        full_std = full_std,
-        sde_net_arch = sde_net_arch,
-        use_expln = use_expln,
-        squash_output = squash_output,
-        features_extractor_class = features_extractor_class ,
-        features_extractor_kwargs = features_extractor_kwargs,
-        normalize_images = normalize_images,
-        optimizer_class = optimizer_class,
-        optimizer_kwargs = optimizer_kwargs,
-        lstm_hidden_size = lstm_hidden_size,
-        n_lstm_layers = n_lstm_layers,
-        shared_lstm = shared_lstm,
-        enable_critic_lstm = enable_critic_lstm,
-        lstm_kwargs =lstm_kwargs)
 
-        #self.env_reference = env_reference
-        self.low = bounds[0]
-        self.high = bounds[1]
+
+        super(ValidOutputBaseRecurrentActorCriticPolicy, self).__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch,
+            activation_fn,
+            ortho_init,
+            use_sde,
+            log_std_init,
+            full_std,
+            sde_net_arch,
+            use_expln,
+            squash_output,
+            features_extractor_class,
+            features_extractor_kwargs,
+            normalize_images,
+            optimizer_class,
+            optimizer_kwargs,
+            lstm_hidden_size,
+            n_lstm_layers,
+            shared_lstm,
+            enable_critic_lstm,
+            lstm_kwargs)
 
         if pretrain is not None:
             #self.load_state_dict(torch.load(pretrain))
             #self.pretrain_mlp_extractor(**pretrain)
+            print("Using pretrained model")
             pretrained_model = ActorCriticPolicy.load("./batterytrading/models/test_model")
             self.action_net = pretrained_model.action_net
             self.value_net = pretrained_model.value_net
             self.mlp_extractor = pretrained_model.mlp_extractor
             self.features_extractor = pretrained_model.features_extractor
-        #self.standard_forward = super(ValidOutputBaseRecurrentActorCriticPolicy, self).forward
-        self.standard_forward = self.forward_pass_standard
+
+        #self.standard_forward = self.forward_pass_standard
         self.projection_layer = self.construct_optimization_layer(self)
         # Overwrite the default feature dimensions of the LSTM
 
-        self.lstm_kwargs = lstm_kwargs if lstm_kwargs is not None else {}
+        self.lstm_kwargs = lstm_kwargs or {}
         self.shared_lstm = shared_lstm
         self.enable_critic_lstm = enable_critic_lstm
         self.lstm_actor = nn.LSTM(
-            self.features_dim,  #-2,
+            self.features_dim,
             lstm_hidden_size,
             num_layers=n_lstm_layers,
             **self.lstm_kwargs,
@@ -112,7 +161,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         self.critic = None
         self.lstm_critic = None
         assert not (
-                self.shared_lstm and self.enable_critic_lstm
+            self.shared_lstm and self.enable_critic_lstm
         ), "You must choose between shared LSTM, seperate or no LSTM for the critic"
 
         # No LSTM for the critic, we still need to convert
@@ -129,11 +178,9 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
                 num_layers=n_lstm_layers,
                 **self.lstm_kwargs,
             )
-
+        self.action_net = ActionNet(self.action_net, self.projection_layer, self.map_action_to_valid_space)
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
-        self.n_steps = 0
-        #self.features_extractor = CustomLSTMExtractor(self.observation_space, features=["features"])
 
     def construct_optimization_layer(self):
         """
@@ -148,10 +195,10 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
     def predict_values(
         self,
-        obs: torch.Tensor,
-        lstm_states: Tuple[torch.Tensor, torch.Tensor],
-        episode_starts: torch.Tensor,
-    ) -> torch.Tensor:
+        obs: th.Tensor,
+        lstm_states: Tuple[th.Tensor, th.Tensor],
+        episode_starts: th.Tensor,
+    ) -> th.Tensor:
         """
         Get the estimated values according to the current policy given the observations.
 
@@ -162,7 +209,6 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         :return: the estimated values.
         """
         features = self.extract_features(obs)
-        #features = features[:, :-2]
         if self.lstm_critic is not None:
             latent_vf, lstm_states_vf = self._process_sequence(features, lstm_states, episode_starts, self.lstm_critic)
         elif self.shared_lstm:
@@ -177,11 +223,12 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
     def evaluate_actions(
         self,
-        obs: torch.Tensor,
-        actions: torch.Tensor,
+        obs: th.Tensor,
+        actions: th.Tensor,
         lstm_states: RNNStates,
-        episode_starts: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        episode_starts: th.Tensor
+
+    ) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Evaluate actions according to the current policy,
         given the observations.
@@ -194,12 +241,9 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         :return: estimated value, log likelihood of taking those actions
             and entropy of the action distribution.
         """
-        # Action bounds are not enforced by the policy, so we do it here
-        action_bounds = obs["action_bounds"]
-
         # Preprocess the observation if needed
+        action_bounds = obs["action_bounds"]
         features = self.extract_features(obs)
-        #features = features[:, :-2]
         latent_pi, _ = self._process_sequence(features, lstm_states.pi, episode_starts, self.lstm_actor)
 
         if self.lstm_critic is not None:
@@ -211,42 +255,20 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
         latent_pi = self.mlp_extractor.forward_actor(latent_pi)
         latent_vf = self.mlp_extractor.forward_critic(latent_vf)
-        distribution = self._get_action_dist_from_latent(latent_pi)
+        distribution, mu, original_mu = self._get_action_dist_from_latent(latent_pi, action_bounds)
+        #distribution = self._get_action_dist_from_latent(latent_pi)
         #actions, projection_loss = self.map_action_to_valid_space(self, actions, action_bounds) # clamp to action bounds
-        actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
+        #actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
         return values, log_prob, distribution.entropy()
 
 
-    def forward(self, obs: torch.Tensor, lstm_states: RNNStates, episode_starts:torch.tensor, deterministic: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Forward pass in all the networks (actor and critic)
-
-        :param obs: Observation
-        :param deterministic: Whether to sample or use deterministic actions
-        :return: action, value and log probability of the action
-        """
-        #obs = torch.rand(obs.shape)
-        #bounds = self.env_reference.bounds
-        features = obs["features"]
-        action_bounds = obs["action_bounds"]
-        actions, values, log_prob, lstm_states, actions_original, mu = self.standard_forward(obs, lstm_states, episode_starts,action_bounds, deterministic=False)
-
-        if not deterministic:
-            self.n_steps += 1
-        #if self.n_steps > 50000:
-        #actions = self.map_action_to_valid_space(self, actions, action_bounds)
-        return actions, values, log_prob, lstm_states, actions_original, mu
-
-    import torch as th
-
-    def forward_pass_standard(
+    def forward(
         self,
         obs: th.Tensor,
         lstm_states: RNNStates,
         episode_starts: th.Tensor,
-        action_bounds: th.Tensor,
         deterministic: bool = False,
     ) -> Tuple[th.Tensor, th.Tensor, th.Tensor, RNNStates]:
         """
@@ -259,7 +281,10 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         :param deterministic: Whether to sample or use deterministic actions
         :return: action, value and log probability of the action
         """
-        # Preprocess the observation if needed
+        #obs = torch.rand(obs.shape)
+        #bounds = self.env_reference.bounds
+        features = obs["features"]
+        action_bounds = obs["action_bounds"]
         features = self.extract_features(obs)
         # latent_pi, latent_vf = self.mlp_extractor(features)
         latent_pi, lstm_states_pi = self._process_sequence(features, lstm_states.pi, episode_starts, self.lstm_actor)
@@ -279,106 +304,62 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
         # Evaluate the values for the given observations
         values = self.value_net(latent_vf)
-        distribution = self._get_action_dist_from_latent(latent_pi)
+        distribution, mu, original_mu = self._get_action_dist_from_latent(latent_pi, action_bounds)
         actions = distribution.get_actions(deterministic=deterministic)
-        mu = distribution.get_actions(deterministic=True)
+        #mu = distribution.get_actions(deterministic=True)
         #mu = torch.clamp(mu, action_bounds[:, 0], action_bounds[:, 1])
-        actions, actions_original = self.map_action_to_valid_space(self, actions, action_bounds)
-
+        actions_original, actions_original = self.map_action_to_valid_space(self, actions, action_bounds)
+        #actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
+        actions, _ = self.map_action_to_valid_space(self, actions_original, action_bounds)
         log_prob = distribution.log_prob(actions)
-        return actions, values, log_prob, RNNStates(lstm_states_pi, lstm_states_vf), actions_original, mu
+        #actions = self.map_action_to_valid_space(self, actions, action_bounds)
+        return actions, values, log_prob, RNNStates(lstm_states_pi, lstm_states_vf), actions_original, mu, original_mu
 
-    def pretrain_mlp_extractor(self, env, learnable_env, teacher_policy):
+    def _get_action_dist_from_latent(self, latent_pi: th.Tensor, action_bounds) -> Distribution:
         """
-        Pretrain the policy and value networks.
-        Get an observation from the environment
-        Simulateously sample observations from both env and learnable env. Feed the env's observation to self and the learnable env's observation to teacher policy
-        Get the action from the teacher policy
-        Get the action from the self
-        Calculate the loss between the two actions
-        Backpropagate the loss to the self
-        Repeat
-        Args:
-            env:
+        Retrieve action distribution given the latent codes.
 
-        Returns:
-
+        :param latent_pi: Latent code for the actor
+        :return: Action distribution
         """
-        # Get an observation from the environment
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
-
-        import numpy as np
-        print("______________________")
-        episode_len = 1
-        n_episodes = 100
-        teacher_action = teacher_policy.train(episode_len*n_episodes)
-        # teacher_action = teacher_action[teacher_policy.planning_horizon:]
-        para_list2 = []
-        # Throw away the first episode_len actions of env
-        #for i in range(episode_len):
-        #    env.step(0)
-        loss_lst = []
-        action_list = []
-        n_epochs = 100
-        #self.action_dist.proba_distribution_net(latent_dim=latent_dim_pi)
-        for x in range(n_epochs):
-            env.reset()
-            for n_episodes in range(n_episodes):
-                print(n_episodes*episode_len, (n_episodes+1)*episode_len)
-                episodic_teacher_action = teacher_action[n_episodes*episode_len:(n_episodes+1)*episode_len]
-                action_list = []
-                #obs = env.step(episodic_teacher_action[0])[0]
-                teacher2_action_list = []
-                sample_weights = []
-                for i in range(episode_len):
-
-                    time_stamp = env.get_current_timestamp()
-                    time_stamp = time_stamp.hour * 60 + time_stamp.minute
-                    # 3:00 - 4:45 Buy Range
-                    if time_stamp >= 3*60 and time_stamp <= 4*60+45:
-                        actionT = 0.15
-                        w = 20/24
-                    # 16:30 - 18:15 Sell Range
-                    elif time_stamp>=16*60+30 and time_stamp <= 18*60+15:
-                        actionT = -0.15
-                        w = 20/24
-                    else:
-                        actionT = 0.0
-                        w = 4/24
-                    sample_weights.append(w)
-                    obs = env.step(actionT)[0]
-                    obs = obs[np.newaxis]
-                    obs = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
-                    actions, _, _ = self(obs, deterministic=True)
-                    #if(episodic_teacher_action[i] != 0):
-                    #    print("env_time: ", env.get_current_timestamp(), "Teacher action: ", episodic_teacher_action[i], "Student action: ", actions,"observation: ", obs)
-
-                    #actions, values, log_prob = self(obs, deterministic=True)
-                    #values.detach(), log_prob.detach(), actions.detach()
-                    action_list.append(actions)
-                    teacher2_action_list.append(actionT)
-                # Calulate the loss between the two actions
-                torched_actions = torch.cat(action_list)
-                torched_teacher_actions = torch.tensor(teacher2_action_list, dtype = torch.float32)
-                sample_weights = torch.tensor(sample_weights, dtype=torch.float32)
-
-                loss_mse = torch.nn.MSELoss()
+        mean_actions, original_mean = self.action_net(latent_pi, action_bounds)
+        if isinstance(self.action_dist, DiagGaussianDistribution):
+            return self.action_dist.proba_distribution(mean_actions, self.log_std), mean_actions, original_mean
+        elif isinstance(self.action_dist, CategoricalDistribution):
+            # Here mean_actions are the logits before the softmax
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, MultiCategoricalDistribution):
+            # Here mean_actions are the flattened logits
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, BernoulliDistribution):
+            # Here mean_actions are the logits (before rounding to get the binary actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, StateDependentNoiseDistribution):
+            return self.action_dist.proba_distribution(mean_actions, self.log_std, latent_pi)
+        else:
+            raise ValueError("Invalid action distribution")
 
 
-                loss_mse = (loss_mse(torched_teacher_actions, torched_actions)*sample_weights).mean()
-                # Backpropagate the loss to the self
-                optimizer.zero_grad()
-                loss_mse.backward()
-                optimizer.step()
-                para_list = []
-                for para in self.action_net.parameters():
-                    para_list.append(para)
-                print(f"pretrainingloss {loss_mse}")
-                if env.wandb_log:
-                    env.wandb_run.log({"pretrainingloss": loss_mse})
-                loss_lst.append(loss_mse.detach().numpy())
+class ActionNet(nn.Module):
+    def __init__(self, action_net, projection_layer, mapping_layer):
 
-        print("______________________")
+        super(ActionNet, self).__init__()
+        self.net = action_net
+        self.mapping_layer = mapping_layer
+        self.projection_layer = projection_layer
+
+    def forward(self, latent_pi, action_bounds) -> th.Tensor:
+        """
+        Forward pass for the action network.
+
+        :param latent_pi: Latent code for the actor
+        :return: Mean actions
+        """
+        mean_actions = self.net(latent_pi)
+        mean_actions, mean_actions_original = self.mapping_layer(self, mean_actions, action_bounds)
+        #mean_actions, mean_actions_original = torch.clamp(mean_actions, action_bounds[0][0]-1e-3, action_bounds[0][1] + 1e-3)
+
+        return mean_actions, mean_actions_original
 
 class ClampedMlpLstmPolicy(ValidOutputBaseRecurrentActorCriticPolicy):
     def __init__(self, *args, **kwargs):

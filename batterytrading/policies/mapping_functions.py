@@ -62,11 +62,13 @@ def map_action_to_valid_space_cvxpy_layer(self, action_original, clamp_params):
     # print(clamp_params[0][:1]-1e-2, clamp_params[0][1:2] + 1e-2)
     # print("action", action, "clamp_params", clamp_params)
     try:
+        #action = action_original
+
         action = self.projection_layer(action_original, clamp_params[:, :1] - 1e-3, clamp_params[:, 1:] + 1e-3)[0]
     except:
         print("Mapping Failed", "action", action_original, "clamp_params", clamp_params)
         action = action_original
-    projection_loss = self.projection_loss(action, action_original)
+    #projection_loss = self.projection_loss(action, action_original)
 
     return action, action_original
 

@@ -76,32 +76,33 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
     }
 
     def __init__(
-        self,
-        policy: Union[str, Type[RecurrentActorCriticPolicy]],
-        env: Union[GymEnv, str],
-        learning_rate: Union[float, Schedule] = 3e-4,
-        n_steps: int = 128,
-        batch_size: Optional[int] = 128,
-        n_epochs: int = 10,
-        gamma: float = 0.99,
-        gae_lambda: float = 0.95,
-        clip_range: Union[float, Schedule] = 0.2,
-        clip_range_vf: Union[None, float, Schedule] = None,
-        normalize_advantage: bool = True,
-        ent_coef: float = 0.0,
-        vf_coef: float = 0.5,
-        proj_coef: float = 10,
-        max_grad_norm: float = 0.5,
-        use_sde: bool = False,
-        sde_sample_freq: int = -1,
-        target_kl: Optional[float] = None,
-        tensorboard_log: Optional[str] = None,
-        create_eval_env: bool = False,
-        policy_kwargs: Optional[Dict[str, Any]] = None,
-        verbose: int = 0,
-        seed: Optional[int] = None,
-        device: Union[th.device, str] = "auto",
-        _init_setup_model: bool = True,
+            self,
+            policy: Union[str, Type[RecurrentActorCriticPolicy]],
+            env: Union[GymEnv, str],
+            learning_rate: Union[float, Schedule] = 3e-4,
+            n_steps: int = 128,
+            batch_size: Optional[int] = 128,
+            n_epochs: int = 10,
+            gamma: float = 0.99,
+            gae_lambda: float = 0.95,
+            clip_range: Union[float, Schedule] = 0.2,
+            clip_range_vf: Union[None, float, Schedule] = None,
+            normalize_advantage: bool = True,
+            ent_coef: float = 0.0,
+            vf_coef: float = 0.5,
+            proj_coef: float = 10,
+            clip_range_proj = 0.01,
+            max_grad_norm: float = 0.5,
+            use_sde: bool = False,
+            sde_sample_freq: int = -1,
+            target_kl: Optional[float] = None,
+            tensorboard_log: Optional[str] = None,
+            create_eval_env: bool = False,
+            policy_kwargs: Optional[Dict[str, Any]] = None,
+            verbose: int = 0,
+            seed: Optional[int] = None,
+            device: Union[th.device, str] = "auto",
+            _init_setup_model: bool = True,
     ):
         super().__init__(
             policy,
@@ -138,6 +139,8 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
         self.target_kl = target_kl
         self._last_lstm_states = None
         self.proj_coef = proj_coef
+        self.clip_range_proj = clip_range_proj
+
         if _init_setup_model:
             self._setup_model()
 
@@ -179,9 +182,11 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
         )
 
         hidden_state_buffer_shape = (self.n_steps, lstm.num_layers, self.n_envs, lstm.hidden_size)
+
         self.rollout_buffer = buffer_cls(
             self.n_steps,
             self.observation_space,
+            #self.action_space,
             gym.spaces.box.Box(-1, 1, shape=(3,)),
             hidden_state_buffer_shape,
             self.device,
@@ -235,7 +240,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
         callback.on_rollout_start()
 
         lstm_states = deepcopy(self._last_lstm_states)
-        self.proj_losses = []
+
         while n_steps < n_rollout_steps:
             if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
                 # Sample a new noise matrix
@@ -245,7 +250,8 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 episode_starts = th.tensor(self._last_episode_starts).float().to(self.device)
-                actions, values, log_probs, lstm_states, actions_original, mu = self.policy.forward(obs_tensor, lstm_states, episode_starts)
+                actions, values, log_probs, lstm_states, actions_original, mu, original_mu = self.policy.forward(obs_tensor, lstm_states, episode_starts)
+                #actions, values, log_probs, lstm_states = self.policy.forward(obs_tensor, lstm_states, episode_starts)
 
             actions = actions.cpu().numpy()
             actions_original = actions_original.cpu().numpy()
@@ -255,7 +261,8 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             # Clip the actions to avoid out of bound error
             if isinstance(self.action_space, gym.spaces.Box):
                 clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
-
+                mu = np.clip(mu, self.action_space.low, self.action_space.high)
+                actions_original = np.clip(actions_original, self.action_space.low, self.action_space.high)
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
             self.num_timesteps += env.num_envs
@@ -271,8 +278,8 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             if isinstance(self.action_space, gym.spaces.Discrete):
                 # Reshape in case of discrete action
                 actions = actions.reshape(-1, 1)
-                actions_original = actions_original.reshape(-1, 1)
-                mu = mu.reshape(-1, 1)
+                #actions_original = actions_original.reshape(-1, 1)
+                #mu = mu.reshape(-1, 1)
             # Handle timeout by bootstraping with value function
             # see GitHub issue #633
             for idx, done_ in enumerate(dones):
@@ -294,7 +301,8 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
 
             rollout_buffer.add(
                 self._last_obs,
-                np.hstack([actions, actions_original, mu]),
+                #actions,
+                np.hstack([actions, actions_original, original_mu]),
                 rewards,
                 self._last_episode_starts,
                 values,
@@ -305,7 +313,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             self._last_obs = new_obs
             self._last_episode_starts = dones
             self._last_lstm_states = lstm_states
-            #self.proj_losses.append(projection_loss)
+
         with th.no_grad():
             # Compute value for the last timestep
             episode_starts = th.tensor(dones).float().to(self.device)
@@ -338,18 +346,16 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
         continue_training = True
 
         # train for n_epochs epochs
-        #self.proj_losses = th.stack(self.proj_losses)[:, :, 0]
         for epoch in range(self.n_epochs):
             approx_kl_divs = []
             # Do a complete pass on the rollout buffer
-            for idx, rollout_data in enumerate(self.rollout_buffer.get(self.batch_size)):
-                loss_mse = th.nn.MSELoss()
-
-                #print("idx ", idx, "proj_loss",  "proj_losses.shape", len(self.proj_losses), "epoch", epoch)
+            for rollout_data in self.rollout_buffer.get(self.batch_size):
+                # print("idx ", idx, "proj_loss",  "proj_losses.shape", len(self.proj_losses), "epoch", epoch)
                 actions_and_original_action = rollout_data.actions
-                actions = actions_and_original_action[:, 0]
-                actions_original = actions_and_original_action[:, 1]
-                mu = actions_and_original_action[:, 2]
+                actions = actions_and_original_action[:, :1]
+                #actions = actions_and_original_action
+                actions_original = actions_and_original_action[:, 1:2]
+                mu = actions_and_original_action[:, 2:3]
                 if isinstance(self.action_space, spaces.Discrete):
                     # Convert discrete action from float to long
                     actions = rollout_data.actions.long().flatten()
@@ -410,9 +416,16 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                     entropy_loss = -th.mean(entropy[mask])
 
                 entropy_losses.append(entropy_loss.item())
-                action_loss = loss_mse(mu, actions_original)
-                #loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.proj_coef * action_loss
+
+                clamped_actions = mu + th.clamp(mu - actions_original, -self.clip_range_proj, self.clip_range_proj)
+                action_loss = th.mean(((clamped_actions - mu) ** 2)[mask])
+
+                # loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+                loss = policy_loss \
+                       + self.ent_coef * entropy_loss \
+                       + self.vf_coef * value_loss \
+                       + self.proj_coef * action_loss
+
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
                 # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419

@@ -54,28 +54,45 @@ class Environment(core.Env):
                  day_ahead_environment=False,
                  prediction_output="action",
                  max_steps=None,
-                 reward_shaping = None,
-                 headless=False,
+                 reward_shaping=None,
+                 cumulative_coef=0.01,
+                 eval_env = False,
+                 n_steps = None,
+                 gaussian_noise = False,
+                 noise_std = 0.01,
                  ):
         """
         Initialize the Environment
+
         Args:
             max_charge: Maximum charge/discharge rate
             total_storage_capacity: Total Storage Capacity of the Battery
             initial_charge: Initial SOC of the Battery
             max_SOC: Maximum SOC of the Battery
+            price_time_horizon:
+            data_root_path: Path to the data
+            time_interval: time per step (15min, 30min, H)
+            wandb_run: Wandb run to log the data
+            n_past_timesteps: number of past day_ahead_steps to use as input
+            time_features: Use time features
+            day_ahead_environment: -
+            prediction_output: We can either predict the action or the future SOC, or percentage of potential charge/discharge
+            max_steps: Maximum number of steps in the environment
+            reward_shaping: Reward shaping schedule, None, "linear", "constant", "cosine", "exponential"
+            cumulative_coef: Coefficient for the cumulative reward shaping
+            eval_env: If the environment is used for evaluation (Evaluation Environment is always one step ahead of the training environment)
+            n_steps: Number of steps in the environment, needed for evaluation Environments (No influence on training environments)
+            gaussian_noise: Add gaussian noise to the day ahead prices and intra day prices
+            noise_std: Standard deviation of the gaussian noise
         """
+
         # Initialize the wandb run (if wandb is used)
-        self.headless = headless
         if not (wandb_run is None):
             self.wandb_log = True
             self.wandb_run = wandb_run
         else:
             self.wandb_log = False
-        #import pygame
-        self.headless = headless
-        #if headless:
-        #    pygame.display.set_mode((1, 1), pygame.NOFRAME)
+
         # Initialize Environment
         self.SOC = initial_charge
         self.initial_charge = initial_charge
@@ -89,8 +106,11 @@ class Environment(core.Env):
         self.max_SOC = np.array(max_SOC)
         self.min_SOC = np.array(0)
         self.TOTAL_STORAGE_CAPACITY = total_storage_capacity
-        # Three actions: Hold, Charge, Discharge
-        self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+
+        self.cumulative_coef = cumulative_coef
+        # Three actions: Hold, Charge, Discharg
+        if self.action_space is None:
+            self.action_space = spaces.Box(low=-0.15, high=0.15, shape=(1,), dtype=np.float32)
         self.state = NotImplementedError
         # Save which action is valid
         self.action_valid = []
@@ -103,13 +123,18 @@ class Environment(core.Env):
                                           root_path=data_root_path,
                                           time_interval=time_interval,
                                           n_past_timesteps=n_past_timesteps,
-                                          time_features=time_features)
+                                          time_features=time_features,
+                                          gaussian_noise=gaussian_noise,
+                                          noise_std=noise_std,
+                                          )
+
 
         features, _, _= self._get_next_state(np.array([0]))
         # Set Dictionary for the Observation Space
         #self.observation_space = spaces.Box(low= -100, high = 1000, shape=features.shape, dtype=np.float32)
         self.observation_space = spaces.Dict({"features": spaces.Box(low=-100, high = 1000, shape=features.shape, dtype=np.float32),
-                                         "action_bounds": spaces.Box(low= -0.15, high = 0.15, shape=(2,), dtype=np.float32)})
+                                              "action_bounds": spaces.Box(low= -0.15, high = 0.15, shape=(2,), dtype=np.float32)})
+        #self.observation_space = spaces.Box(low=-100, high = 1000, shape=features.shape, dtype=np.float32)
 
         if max_steps is None:
             self.max_steps = 99999999999999
@@ -118,7 +143,15 @@ class Environment(core.Env):
         self.setup_reward_schedule(reward_shaping)
 
         self.n_steps = 0
-        self.reset()
+        self.eval_env = eval_env
+        if eval_env:
+            self.max_steps = n_steps # We want to evaluate the agent for n_steps (same stepwidth as during training -> This ensures that the agent evaluated for the same amount of time as trained)
+            self.eval_episode = 0
+            dummy_action = np.array([0])
+            # Skip the first n_steps + 3 Steps (To ensure that the agent is evaluated one timehorizon ahead of training)
+            for i in range(0, n_steps+3):
+                self.step(self.action_space.sample())
+        #self.reset()
 
     def setup_reward_schedule(self, reward_schedule):
 
@@ -130,7 +163,7 @@ class Environment(core.Env):
             get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"]
         elif schedule_type == "linear":
             get_soc_reward_weight = lambda iteration: reward_schedule["base_soc_reward"] * (self.max_steps - iteration) / self.max_steps
-            get_action_taking_reward_weight = lambda iteration: reward_schedule["base_action_taking_reward"] * (self.max_steps - iteration) / self.max_steps
+            get_action_taking_reward_weight = lambda iteration: reward_schedule["base_action_taking_reward"] * (self.max_steps/2.5 - iteration) / self.max_steps
             get_consecutive_action_reward_weight = lambda iteration: reward_schedule["base_consecutive_action_reward"] * (self.max_steps - iteration) / self.max_steps
             get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"] * iteration / self.max_steps
         elif schedule_type == "exponential":
@@ -139,12 +172,12 @@ class Environment(core.Env):
             get_consecutive_action_reward_weight = lambda iteration: reward_schedule["base_consecutive_action_reward"] * np.exp(-iteration / reward_schedule["decay"])
             get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"] * np.exp(iteration / reward_schedule["decay"])
         elif schedule_type == "cosine":
-            get_soc_reward_weight = lambda iteration: reward_schedule["base_soc_reward"] * np.cos(iteration / self.max_steps * np.pi)
+            get_soc_reward_weight = lambda iteration: reward_schedule["base_soc_reward"] + reward_schedule["base_soc_reward"]  * np.cos(iteration / self.max_steps * np.pi)
             get_action_taking_reward_weight = lambda iteration: reward_schedule["base_action_taking_reward"] * np.cos(iteration / self.max_steps * np.pi)
             get_consecutive_action_reward_weight = lambda iteration: reward_schedule["base_consecutive_action_reward"] * np.cos(iteration / self.max_steps * np.pi)
             # The income reward increases linearly
-            get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"] * iteration / self.max_steps
-
+            get_income_reward_weight = lambda iteration: 1+  reward_schedule["base_income_reward"] * iteration / self.max_steps
+            #get_income_reward_weight = lambda iteration: reward_schedule["base_income_reward"]
         else:
             raise ValueError("Unknown reward schedule type {}".format(schedule_type))
 
@@ -163,14 +196,18 @@ class Environment(core.Env):
         Returns:
             Environment (reseted)
         """
-        self.SOC = self.initial_charge
-        self.TOTAL_EARNINGS = 0
-        self.ROLLING_EARNINGS = []
-        self.action_valid = []
-        self.data_loader.reset()
-        # super().reset()
-        self.n_steps = 0
-        return self.step(np.array([0]))[0]
+        if not self.eval_env:
+            self.SOC = self.initial_charge
+            self.TOTAL_EARNINGS = 0
+            self.ROLLING_EARNINGS = []
+            self.action_valid = []
+            self.data_loader.reset()
+            # super().reset()
+            self.n_steps = 0
+        else:
+            self.eval_episode += 1
+        obs, price, done, info = self.step(self.action_space.sample())
+        return obs#, price, done, info
 
     def _get_next_state(self, action):
         """
@@ -187,7 +224,8 @@ class Environment(core.Env):
             intra_day_price, done= self.data_loader.get_next_intraday_price()
             price = intra_day_price[0]
         else:
-            features, price, done = self.data_loader.get_next_day_ahead_and_intraday_price()
+            features, price, done = self.data_loader.get_next_features()
+            #day_ahead, done = self.data_loader.get_next_day_ahead_price(set_current_index=False)
 
         up_max_charge = np.min([(self.max_SOC - self.SOC), self.max_charge])
         down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])
@@ -206,7 +244,9 @@ class Environment(core.Env):
 
     def set_bounds(self, down_max_charge, up_max_charge):
         #self.bounds = torch.Tensor(np.array([down_max_charge])), torch.Tensor(np.array([up_max_charge]))
-        self.bounds = torch.Tensor([down_max_charge, up_max_charge])
+        bounds = np.hstack([down_max_charge, up_max_charge])
+        self.bounds = bounds
+
 
     def step(self, action):
         """
@@ -229,6 +269,8 @@ class Environment(core.Env):
         epsilon = 1e-1
         # Clip action into a valid space
         valid = (np.abs(action) <= self.max_charge + epsilon) & (0 <= action + self.SOC + epsilon) & (action + self.SOC <= self.TOTAL_STORAGE_CAPACITY + epsilon)
+        if not valid:
+            print("Action not valid: {}".format(action))
         self.action_valid.append(float(valid))
         # Reduce action to max_charge (maximum charge/discharge rate per period)
         action = np.clip(action, -self.max_charge, self.max_charge)
@@ -244,13 +286,14 @@ class Environment(core.Env):
         # Calculate reward weights
         soc_reward_weight, action_taking_reward_weight, consecutive_action_reward_weight = self.calculate_reward_weights()
         income_reward = self.calculate_earnings(action, price)
-
+        # Cumulative reward
         # Calculate reward/earnings
         # Different reward functions can be used
+        cumulative_reward = self.calculate_reward_cumulative()
+
         rewards = soc_reward * soc_reward_weight + \
                   action_taking_reward * action_taking_reward_weight + \
-                  income_reward  + consecutive_action_reward * consecutive_action_reward_weight
-
+                  income_reward  + consecutive_action_reward * consecutive_action_reward_weight + cumulative_reward * self.cumulative_coef
 
         # Option 2: Reward is the cumulative earnings
         #reward = self.calculate_reward_cumulative(price, action)
@@ -265,7 +308,29 @@ class Environment(core.Env):
 
         # Log to wandb
         if self.wandb_log:
-            self.wandb_run.log({"reward": rewards,
+            if self.eval_env:
+                self.wandb_run.log({f"EVAL_reward": rewards,
+                                f"EVAL_action": action,
+                                f"EVAL_price": price,
+                                f"EVAL_SOC": self.SOC,
+                                f"EVAL_action_valid": float(self.action_valid[-1]),
+                                f"EVAL_total_earnings": self.TOTAL_EARNINGS,
+                                f"EVAL_monthly_earnings": np.mean(self.ROLLING_EARNINGS[-672:]),
+                                f"EVAL_monthly_earnings (daily average)": np.mean(self.ROLLING_EARNINGS[-672:])*(24*4),
+                                #f"EVAL_action_taking_reward": action_taking_reward,
+                                #f"EVAL_income_reward": income_reward,
+                                #f"EVAL_consecutive_action_reward": consecutive_action_reward,
+                                #f"EVAL_cumulative_reward": cumulative_reward,
+                                #f"EVAL_soc_reward": soc_reward,
+                                #f"EVAL_action_taking_reward_weight": action_taking_reward_weight,
+                                #f"EVAL_consecutive_action_reward_weight": consecutive_action_reward_weight,
+                                #f"EVAL_soc_reward_weight": soc_reward_weight,
+                                f"n_env_steps": self.n_steps,
+                                # convert datetime object to unix timestamp
+                                f"time": self.get_current_timestamp()
+                                })
+            else:
+                self.wandb_run.log({"reward": rewards,
                                 "action": action,
                                 "price": price,
                                 "SOC": self.SOC,
@@ -276,11 +341,14 @@ class Environment(core.Env):
                                 "action_taking_reward": action_taking_reward,
                                 "income_reward": income_reward,
                                 "consecutive_action_reward": consecutive_action_reward,
+                                "cumulative_reward": cumulative_reward,
                                 "soc_reward": soc_reward,
                                 "action_taking_reward_weight": action_taking_reward_weight,
                                 "consecutive_action_reward_weight": consecutive_action_reward_weight,
                                 "soc_reward_weight": soc_reward_weight,
-                                })
+                                f"n_env_steps": self.n_steps,
+                                f"time": self.get_current_timestamp()
+                                    })
         # Check if reward is a numpy array
 
         if isinstance(rewards, np.ndarray):
@@ -291,14 +359,26 @@ class Environment(core.Env):
             rewards = rewards[0]
         # Saves time of day (For pretraining with non sb3-models)
         #self.tod = next_state[-3]
-        if self.n_steps == self.max_steps:
+        if self.eval_env:
+            if self.n_steps % self.max_steps == 0:
+                done = True
+        elif self.n_steps == self.max_steps:
             done = True
 
         next_state_dict = {
             "features": next_state,
-            "action_bounds": self.bounds}
+            "action_bounds": torch.Tensor(self.bounds)}
+        #return next_state, rewards, done, {}
         return next_state_dict, rewards, done, {}
         #return next_state, rewards, done, {}
+
+    def calculate_reward_cumulative(self):
+        # Calculate earnings
+        # Calculate reward
+        cumulative_reward = 0.0
+        if self.get_current_timestamp().hour *60 + self.get_current_timestamp().minute == 0:
+            cumulative_reward = np.sum(self.ROLLING_EARNINGS[-96:])
+        return cumulative_reward
 
     def calculate_reward_weights(self):
         soc_reward_weight = self.get_soc_reward_weight(self.n_steps)
@@ -354,6 +434,104 @@ class Environment(core.Env):
         self.ROLLING_EARNINGS.append(earnings)
 
         return earnings
+
+class DiscreteEnvironment(Environment):
+    def __init__(self, max_charge=0.15,
+                 total_storage_capacity=1,
+                 initial_charge=0.0,
+                 max_SOC=1,
+                 price_time_horizon=1.5,
+                 data_root_path="..",
+                 time_interval="15min",
+                 wandb_run=None,
+                 n_past_timesteps=1,
+                 time_features=True,
+                 day_ahead_environment=False,
+                 prediction_output="action",
+                 max_steps=None,
+                 reward_shaping=None,
+                 cumulative_coef=0.01,
+                 eval_env = False,
+                 n_steps = None,
+                 gaussian_noise = False,
+                 noise_std = 0.01,
+                 ):
+        """
+        Initialize the Environment
+
+        Args:
+            max_charge: Maximum charge/discharge rate
+            total_storage_capacity: Total Storage Capacity of the Battery
+            initial_charge: Initial SOC of the Battery
+            max_SOC: Maximum SOC of the Battery
+            price_time_horizon:
+            data_root_path: Path to the data
+            time_interval: time per step (15min, 30min, H)
+            wandb_run: Wandb run to log the data
+            n_past_timesteps: number of past day_ahead_steps to use as input
+            time_features: Use time features
+            day_ahead_environment: -
+            prediction_output: We can either predict the action or the future SOC, or percentage of potential charge/discharge
+            max_steps: Maximum number of steps in the environment
+            reward_shaping: Reward shaping schedule, None, "linear", "constant", "cosine", "exponential"
+            cumulative_coef: Coefficient for the cumulative reward shaping
+            eval_env: If the environment is used for evaluation (Evaluation Environment is always one step ahead of the training environment)
+            n_steps: Number of steps in the environment, needed for evaluation Environments (No influence on training environments)
+            gaussian_noise: Add gaussian noise to the day ahead prices and intra day prices
+            noise_std: Standard deviation of the gaussian noise
+        """
+        # Set the action space to 5 discrete actions
+        self.action_space = spaces.Discrete(5)
+        self.discrete_to_continuous = {0: -0.15, 1: -0.075, 2: 0, 3: 0.075, 4: 0.15}
+        self.discrete_to_continuous_array = np.fromiter(self.discrete_to_continuous.values(), dtype = float)
+        # Call super constructor
+        super().__init__(max_charge=max_charge,
+                            total_storage_capacity=total_storage_capacity,
+                            initial_charge=initial_charge,
+                            max_SOC=max_SOC,
+                            price_time_horizon=price_time_horizon,
+                            data_root_path=data_root_path,
+                            time_interval=time_interval,
+                            wandb_run=wandb_run,
+                            n_past_timesteps=n_past_timesteps,
+                            time_features=time_features,
+                            day_ahead_environment=day_ahead_environment,
+                            prediction_output=prediction_output,
+                            max_steps=max_steps,
+                            reward_shaping=reward_shaping,
+                            cumulative_coef=cumulative_coef,
+                            eval_env=eval_env,
+                            n_steps=n_steps,
+                            gaussian_noise=gaussian_noise,
+                            noise_std=noise_std)
+
+        # Discretize the action space
+    def valid_action_mask(self):
+        # Check if the action is valid for the ActionMasker
+        epsilon = 1e-6
+        valid_mask = (np.abs(self.discrete_to_continuous_array) <= self.max_charge + epsilon) & \
+                (0 <= self.discrete_to_continuous_array + self.SOC + epsilon) & \
+                (self.discrete_to_continuous_array + self.SOC <= self.TOTAL_STORAGE_CAPACITY + epsilon)
+
+        return valid_mask
+
+    def step(self, action):
+        """
+        Step the Environment
+        Args:
+            action: Action to take
+
+        Returns:
+            next_state: Next State
+            reward: Reward
+            done: If the episode is done
+            info: Additional Information
+        """
+        # Convert the action to a continuous action
+        action = np.array([self.discrete_to_continuous[action]])
+        next_state_dict, rewards, done, _ = super().step(action)
+        return next_state_dict, rewards, done, _
+
 if __name__ == "__main__":
     env = Environment(data_root_path="../../")
     #env = Environment(data_root_path="../../")
