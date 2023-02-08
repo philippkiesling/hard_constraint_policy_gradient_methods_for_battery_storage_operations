@@ -1,3 +1,6 @@
 [submodule "DRL_Multi-Purpose"]
 	path = DRL_Multi-Purpose
 	url = git@git.scc.kit.edu:ukess/DRL_Multi-Purpose.git
+[submodule "stable-baselines3-contrib-maskable-recurrent-ppo"]
+	path = stable-baselines3-contrib-maskable-recurrent-ppo
+	url = git@github.com:philippkiesling/stable-baselines3-contrib-maskable-recurrent-ppo.git
