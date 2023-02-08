@@ -12,6 +12,8 @@ from batterytrading.ppo.model_setup_dict import get_config
 from stable_baselines3.ppo import MultiInputPolicy
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy, MaskableMultiInputActorCriticPolicy
 from sb3_contrib import MaskablePPO
+from batterytrading.policies.maskable_recurrent_policies import  MaskableRecurrentActorCriticPolicy
+from batterytrading.ppo.ppo_masked_recurrent import MaskableRecurrentPPO
 # Get Conifguration
 model_cfg, train_cfg = get_config("./ppo/cfg.yml")
 
@@ -28,8 +30,8 @@ if policy_type == "MlpPolicy":
     print(">>>>>>>> Using  MLP-PPO<<<<<<<<")
 elif policy_type == "MlpLstmPolicy":
     #model_cfg["policy"] = "CnnLstmPolicy"
-    model_cfg["policy"] = "MlpLstmPolicy"
-    model = RecurrentPPO(**model_cfg)
+    model_cfg["policy"] = MaskableRecurrentActorCriticPolicy #"MlpLstmPolicy"
+    model = MaskableRecurrentPPO(**model_cfg)
     print(">>>>>>>> Using Recurrent-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpPolicy":
     model_cfg["policy"] = ClampedActorCriticPolicy

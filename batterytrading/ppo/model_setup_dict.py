@@ -5,7 +5,7 @@ from sys import gettrace as sys_get_trace
 
 import yaml
 from pathlib import Path
-from batterytrading.environment.environment_dict import Environment, DiscreteEnvironment#, NormalizeObservationPartially, RandomSamplePretrainingEnv
+from batterytrading.environment.environment_dict import ContinousEnergyArbitrageEnvironment, DiscreteContinousEnergyArbitrageEnvironment#, NormalizeObservationPartially, RandomSamplePretrainingEnv
 import wandb
 from wandb.integration.sb3 import WandbCallback
 import torch.nn as nn
@@ -17,6 +17,7 @@ from batterytrading.wrappers import NormalizeObservationDict
 from stable_baselines3.common.callbacks import EvalCallback
 from batterytrading.policies.torch_layers import CustomLSTMExtractor
 from sb3_contrib.common.maskable.evaluation import evaluate_policy as evaluate_maskable_policy
+from batterytrading.common import EvalCallbackActionMask
 
 def get_config(config_path):
     """
@@ -52,19 +53,24 @@ def get_config(config_path):
         run = None
     # create environment and add it to the model config
     env_config["n_steps"] = model_config["n_steps"]
-    if model_config["env"] == "BatteryStorageEnv":
-        env_config["wandb_run"] = run
+    if "discrete" in model_config["env"].lower():
+        env_config["type"] = DiscreteContinousEnergyArbitrageEnvironment
+    else:
+        env_config["type"] = ContinousEnergyArbitrageEnvironment
 
-        if env_config["n_envs"] <= -1:
-            # raise ValueError("Pretraining with multiple environments is not supported")
-            env_config.pop("n_envs")
-            env = _get_configured_envOLD(env_config)
-        else:
-            print(f"Training with multiple environments {env_config['n_envs']}")
-            #env = _get_pretrained_env(env_config)
-            env, eval_env = _get_configured_env(env_config)
+    env_config["wandb_run"] = run
 
-        model_config["env"] = env
+    if env_config["n_envs"] <= -1:
+        # raise ValueError("Pretraining with multiple environments is not supported")
+        env_config.pop("n_envs")
+        env = _get_configured_envOLD(env_config)
+    else:
+        print(f"Training with multiple environments {env_config['n_envs']}")
+        #env = _get_pretrained_env(env_config)
+        env, eval_env = _get_configured_env(env_config)
+
+    model_config["env"] = env
+
     if model_config["pretrain"] == True:
         model_config["pretrain_env"] = _get_pretrained_env(env_config)
     else:
@@ -96,7 +102,9 @@ def get_config(config_path):
     model_config["policy_kwargs"]["features_extractor_class"] = CustomLSTMExtractor
     model_config["policy_kwargs"]["features_extractor_kwargs"] = {'features': ["features"]}
     # The Eval Callback is currently not working with invalid action masking
-    eval_callback = EvalCallback(eval_env, eval_freq=672, n_eval_episodes = 1,  warn=True, deterministic=True, render=False)
+    eval_callback = EvalCallbackActionMask(eval_env, eval_freq=672, n_eval_episodes=1, warn=True, deterministic=True, render=False)
+
+    #eval_callback = EvalCallback(eval_env, eval_freq=672, n_eval_episodes = 1,  warn=True, deterministic=True, render=False)
     eval_callback.evaluate_policy = evaluate_maskable_policy
     train_config["callback"] = eval_callback
     return model_config, train_config
@@ -203,7 +211,7 @@ env_preprocessing = None
 global first_env
 first_env = True
 
-def _get_configured_envOLD(env_config):
+def _get_configured_envOLD(env_config ):
     """
     creates environment with given config
     Args:
@@ -214,8 +222,9 @@ def _get_configured_envOLD(env_config):
     global env_preprocessing
     if env_preprocessing is None:
         env_preprocessing = env_config.pop("preprocessing")
+    EnergyArbitrageEnvironment = env_config.pop("type")
     #n_envs = env_config.pop("n_envs")
-    env = DiscreteEnvironment(**env_config)
+    env = EnergyArbitrageEnvironment(**env_config)
     env_config["wandb_run"] = None
     # gym.wrappers FilterObservation
     # returns dictionaries as observations
@@ -302,7 +311,9 @@ def _get_configured_single_env(env_config, env_id):
     if env_id > 0:
         env_config["wandb_run"] = None
     env_preprocessing = env_config.pop("preprocessing")
-    env = DiscreteEnvironment(**env_config)
+
+    EnergyArbitrageEnvironment = env_config.pop("type")
+    env = EnergyArbitrageEnvironment(**env_config)
 
     if isinstance( env.observation_space, gym.spaces.Dict):
         dict_env = True
@@ -385,7 +396,7 @@ def _setup_pretraining(pretrain_config, env_config):
         env = _get_configured_env(env_config)
         learnable_env_cfg = env_config.copy()
         # learnable_env_cfg["day_ahead_environment"] = True
-        learnable_env = DiscreteEnvironment(**learnable_env_cfg)
+        learnable_env = EnergyArbitrageEnvironment(**learnable_env_cfg)
         pretrain_config["env"] = env
         pretrain_config["learnable_env"] = learnable_env
         teacher_policy = BaselineModel(learnable_env)

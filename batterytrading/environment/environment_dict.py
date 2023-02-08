@@ -40,7 +40,7 @@ class NormalizeObservationPartially(NormalizeObservation):
         obs[:-2] = obsN
         return obs
 
-class Environment(core.Env):
+class ContinousEnergyArbitrageEnvironment(core.Env):
     def __init__(self, max_charge=0.15,
                  total_storage_capacity=1,
                  initial_charge=0.0,
@@ -435,7 +435,7 @@ class Environment(core.Env):
 
         return earnings
 
-class DiscreteEnvironment(Environment):
+class DiscreteContinousEnergyArbitrageEnvironment(ContinousEnergyArbitrageEnvironment):
     def __init__(self, max_charge=0.15,
                  total_storage_capacity=1,
                  initial_charge=0.0,
@@ -533,7 +533,7 @@ class DiscreteEnvironment(Environment):
         return next_state_dict, rewards, done, _
 
 if __name__ == "__main__":
-    env = Environment(data_root_path="../../")
+    env = ContinousEnergyArbitrageEnvironment(data_root_path="../../")
     #env = Environment(data_root_path="../../")
     env.reset()
     while True:
