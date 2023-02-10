@@ -88,9 +88,42 @@ def get_data(root_path="", time_interval = "15min", gaussian_noise = False, nois
     max_index = df[~df["intraday_15min"].isna()].index.max()
     df = df.loc[min_index:max_index]
     df["intraday_15min"] = df["intraday_15min"].interpolate("linear")
+    # Add difference
+    df["intraday_15min_diff"] = df["intraday_15min"].diff()
+    df["intraday_15min_diff10"] = df["intraday_15min"].diff(10)
+
+    df = df[~df["intraday_15min_diff10"].isna()]
+    df = df[~df["intraday_15min_diff"].isna()]
+
+    #res1 = []
+    #res2 = []
+    #for time_idx, features in df[["intraday_15min", "day_ahead"]].iloc[0:].iterrows():
+    #    x = features.to_dict()
+    ##    res = scaler.learn_one(x).transform_one(x)
+    #    res1.append(res["intraday_15min"])
+    #    res2.append(res["day_ahead"])
+    #df["intraday_15min_scaled"] = res1
+    #df["day_ahead_scaled"] = res2
+
+    from river.preprocessing import AdaptiveStandardScaler
+    scaler = AdaptiveStandardScaler(fading_factor=0.11)
+    res = []
+    for x in df["intraday_15min"].iloc[0:]:
+        x = {"x": x}
+        res.append(scaler.learn_one(x).transform_one(x)["x"])
+    df["intraday_15min_scaled"] = res
+
+    scaler = AdaptiveStandardScaler(fading_factor=0.11)
+    res = []
+    for x in df["day_ahead"].iloc[0:]:
+        x = {"x": x}
+        res.append(scaler.learn_one(x).transform_one(x)["x"])
+    df["day_ahead_scaled"] = res
+    # Resample to hourly data if time_interval is "H"
     if time_interval == "H":
         df = df.resample("H").mean()
         df["intraday_15min"] = df["intraday_15min"].interpolate("linear")
+    # Add gaussian noise, if specified
     if gaussian_noise:
         df["intraday_15min"] = df["intraday_15min"] + get_gaussian_noise(0, noise_std, df.shape[0])
         df["day_ahead"] = df["day_ahead"] + get_gaussian_noise(0, noise_std, df.shape[0])
@@ -103,6 +136,7 @@ class Data_Loader_np:
                  root_path="",
                  time_interval="15min",
                  n_past_timesteps = 1,
+                 start_index = 0,
                  time_features=True,
                  gaussian_noise = False,
                  noise_std = -1):
@@ -118,10 +152,11 @@ class Data_Loader_np:
             time_interval: Time interval of the data. Either 15min or H
             n_past_timesteps: Number of past timesteps to return (intraday prices)
             time_features: If True, time features are returned
-
+            start_index: Index of the first timestep to return
         """
         self.data = get_data(root_path=root_path, time_interval=time_interval,  gaussian_noise = gaussian_noise, noise_std = noise_std)
-        self.current_index = 0
+        self.current_index = start_index
+        self.start_index = start_index
         self.max_index = len(self.data) - 1
         self.time_interval = time_interval
         # Initialize the day ahead price as NaN
@@ -133,15 +168,17 @@ class Data_Loader_np:
         self.n_past_timesteps = n_past_timesteps
         self.time_features = time_features
         # self.intraday_price[:] = np.NAN
+        self.intraday_price_scaled = np.zeros((24 + 12) * 4)
 
     def reset(self):
         """
         Reset the current index, day ahead price and intraday price
         """
-        self.current_index = 0
+        self.current_index = self.start_index
         self.day_ahead_price = np.zeros((24 + 12) * 4)
         self.day_ahead_price[:] = np.NAN
         self.intraday_price = np.zeros((24 + 12) * 4)
+        self.intraday_price_scaled = np.zeros((24 + 12) * 4)
         # self.intraday_price[:] = np.NAN
         return self  #
 
@@ -155,12 +192,12 @@ class Data_Loader_np:
             self.current_index += 1
         self.day_ahead_price = np.roll(self.day_ahead_price, -1)
         self.day_ahead_price[-1] = np.NAN
+
         if self.current_index + (24 + 12) * 4 < self.max_index:
             # Rotate the day ahead price one step ahead and delete the last entry
 
             if self.data.iloc[self.current_index].name.hour == 12 and self.data.iloc[self.current_index].name.minute == 0:
                 self.day_ahead_price[(12) * 4 :] = self.data.iloc[self.current_index + 12 * 4 : self.current_index + (24 + 12) * 4]["day_ahead"]
-
 
             return self.day_ahead_price, False
         else:
@@ -169,7 +206,7 @@ class Data_Loader_np:
     def get_current_timestamp(self):
         return self.data.iloc[self.current_index].name
 
-    def get_next_intraday_price(self, set_current_index=False):
+    def get_next_intraday_price(self, set_current_index=False, n_past_timestep = 1):
         """
         Get the next intraday price
         Returns:
@@ -179,7 +216,16 @@ class Data_Loader_np:
         self.intraday_price = np.roll(self.intraday_price, 1)
         self.intraday_price[0] = self.data.iloc[self.current_index]["intraday_15min"]
         return self.intraday_price, False
-
+    def get_next_intraday_price_scaled(self, set_current_index=False, n_past_timestep = 1):
+        """
+        Get the next intraday price
+        Returns:
+            intraday price
+        """
+        # Rotate the day ahead price one step ahead and delete the last entry
+        self.intraday_price_scaled = np.roll(self.intraday_price_scaled, 1)
+        self.intraday_price_scaled[0] = self.data.iloc[self.current_index]["intraday_15min_diff10"]
+        return self.intraday_price_scaled, False
     def _get_time_features(self):
         """
         Get the current time of day as sine and cosine waves with different frequencies (daily, weekly, monthly, yearly)
@@ -230,15 +276,16 @@ class Data_Loader_np:
 
         day_ahead_price, done_day_ahead = self.get_next_day_ahead_price(set_current_index=False)
         intraday_price, done_intraday = self.get_next_intraday_price(set_current_index=False)
+        intraday_price_scaled, done_intraday_scaled = self.get_next_intraday_price_scaled(set_current_index=False)
         time_features, done_time_features = self._get_time_features()
         #features = np.hstack([intraday_price[0], time_features])
         day_ahead_price = day_ahead_price[[idx * 4 for idx in range(0,12)]]
         #day_ahead_price = day_ahead_price[46:47]
         day_ahead_price[np.isnan(day_ahead_price)] = 0.0
         if self.time_features:
-            features = np.hstack([intraday_price[0:self.n_past_timesteps], day_ahead_price, time_features ])
+            features = np.hstack([intraday_price[0:self.n_past_timesteps],intraday_price[0:self.n_past_timesteps], day_ahead_price, time_features ])
         else:
-            features = np.hstack([intraday_price[0:self.n_past_timesteps], day_ahead_price])
+            features = np.hstack([intraday_price[0:self.n_past_timesteps],intraday_price[0:self.n_past_timesteps], day_ahead_price])
         price = intraday_price[0]
         done = done_day_ahead or done_intraday or done_time_features
 

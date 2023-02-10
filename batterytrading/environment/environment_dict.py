@@ -57,9 +57,10 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
                  reward_shaping=None,
                  cumulative_coef=0.01,
                  eval_env = False,
-                 n_steps = None,
+                 skip_steps = None,
                  gaussian_noise = False,
                  noise_std = 0.01,
+                 n_steps_till_eval = 672
                  ):
         """
         Initialize the Environment
@@ -81,18 +82,12 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
             reward_shaping: Reward shaping schedule, None, "linear", "constant", "cosine", "exponential"
             cumulative_coef: Coefficient for the cumulative reward shaping
             eval_env: If the environment is used for evaluation (Evaluation Environment is always one step ahead of the training environment)
-            n_steps: Number of steps in the environment, needed for evaluation Environments (No influence on training environments)
+            skip_steps: Number of steps in the environment, needed for evaluation Environments (No influence on training environments)
             gaussian_noise: Add gaussian noise to the day ahead prices and intra day prices
             noise_std: Standard deviation of the gaussian noise
         """
-
-        # Initialize the wandb run (if wandb is used)
-        if not (wandb_run is None):
-            self.wandb_log = True
-            self.wandb_run = wandb_run
-        else:
-            self.wandb_log = False
-
+        self.n_steps_till_eval = n_steps_till_eval
+        self.wandb_log = False
         # Initialize Environment
         self.SOC = initial_charge
         self.initial_charge = initial_charge
@@ -119,6 +114,7 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
         self.time_step = time_interval
         self.day_ahead_environment = day_ahead_environment
         self.price_time_horizon = price_time_horizon
+
         self.data_loader = Data_Loader_np(price_time_horizon=price_time_horizon,
                                           root_path=data_root_path,
                                           time_interval=time_interval,
@@ -126,8 +122,9 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
                                           time_features=time_features,
                                           gaussian_noise=gaussian_noise,
                                           noise_std=noise_std,
+                                          start_index=skip_steps
                                           )
-
+        self.n_steps = skip_steps
 
         features, _, _= self._get_next_state(np.array([0]))
         # Set Dictionary for the Observation Space
@@ -142,17 +139,37 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
             self.max_steps = max_steps
         self.setup_reward_schedule(reward_shaping)
 
-        self.n_steps = 0
         self.eval_env = eval_env
-        if eval_env:
-            self.max_steps = n_steps # We want to evaluate the agent for n_steps (same stepwidth as during training -> This ensures that the agent evaluated for the same amount of time as trained)
-            self.eval_episode = 0
-            dummy_action = np.array([0])
+        #if eval_env:
+        #    self.max_steps = n_steps_till_eval # We want to evaluate the agent for n_steps (same stepwidth as during training -> This ensures that the agent evaluated for the same amount of time as trained)
+        #    self.eval_episode = 0
+        #    dummy_action = np.array([0])
             # Skip the first n_steps + 3 Steps (To ensure that the agent is evaluated one timehorizon ahead of training)
-            for i in range(0, n_steps+3):
-                self.step(self.action_space.sample())
-        #self.reset()
 
+        #self.skip_steps_vector(skip_steps)
+        #self.reset()
+        # Initialize the wandb run (if wandb is used)
+        if not (wandb_run is None):
+            self.wandb_log = True
+            self.wandb_run = wandb_run
+        else:
+            self.wandb_log = False
+
+    def skip_steps(self, skip_steps):
+            if not skip_steps is None:
+                for i in range(0, skip_steps ):
+                    self.step(self.action_space.sample())
+            print(self.get_current_timestamp())
+
+    def skip_steps_vector(self, skip_steps):
+        self.n_steps = skip_steps
+        self.data_loader.index = skip_steps
+        self.data_loader.get_next_day_ahead_price()
+
+        #if not skip_steps is None:
+        #    for i in range(0, skip_steps ):
+        #        self.step(np.array([0]))
+        print(self.get_current_timestamp())
     def setup_reward_schedule(self, reward_schedule):
 
         schedule_type = reward_schedule["type"]
@@ -204,8 +221,8 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
             self.data_loader.reset()
             # super().reset()
             self.n_steps = 0
-        else:
-            self.eval_episode += 1
+        #else:
+        #    self.eval_episode += 1
         obs, price, done, info = self.step(self.action_space.sample())
         return obs#, price, done, info
 
@@ -226,7 +243,7 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
         else:
             features, price, done = self.data_loader.get_next_features()
             #day_ahead, done = self.data_loader.get_next_day_ahead_price(set_current_index=False)
-
+        #features = np.hstack([features, day_ahead])
         up_max_charge = np.min([(self.max_SOC - self.SOC), self.max_charge])
         down_max_charge = np.max([-(self.SOC - self.min_SOC), -self.max_charge])
 
@@ -257,9 +274,6 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
         Returns:
             next state, reward, done, info
         """
-        # err_msg = f"{action!r} ({type(action)}) invalid"
-        # assert self.action_space.contains(action), err_msg
-        # assert self.state is not None, "Call reset before using step method."
         self.n_steps += 1
 
         if self.prediction_output == "nextSOC":
@@ -267,10 +281,12 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
         elif self.prediction_output == "percentage_action":
             action = (action-0.5) * self.max_charge
         epsilon = 1e-1
+
         # Clip action into a valid space
         valid = (np.abs(action) <= self.max_charge + epsilon) & (0 <= action + self.SOC + epsilon) & (action + self.SOC <= self.TOTAL_STORAGE_CAPACITY + epsilon)
         if not valid:
-            print("Action not valid: {}".format(action))
+            #print("Action not valid: {}".format(action))
+            pass
         self.action_valid.append(float(valid))
         # Reduce action to max_charge (maximum charge/discharge rate per period)
         action = np.clip(action, -self.max_charge, self.max_charge)
@@ -360,7 +376,7 @@ class ContinousEnergyArbitrageEnvironment(core.Env):
         # Saves time of day (For pretraining with non sb3-models)
         #self.tod = next_state[-3]
         if self.eval_env:
-            if self.n_steps % self.max_steps == 0:
+            if self.n_steps % self.n_steps_till_eval == 0:
                 done = True
         elif self.n_steps == self.max_steps:
             done = True
@@ -452,7 +468,7 @@ class DiscreteContinousEnergyArbitrageEnvironment(ContinousEnergyArbitrageEnviro
                  reward_shaping=None,
                  cumulative_coef=0.01,
                  eval_env = False,
-                 n_steps = None,
+                 skip_steps = None,
                  gaussian_noise = False,
                  noise_std = 0.01,
                  ):
@@ -476,7 +492,7 @@ class DiscreteContinousEnergyArbitrageEnvironment(ContinousEnergyArbitrageEnviro
             reward_shaping: Reward shaping schedule, None, "linear", "constant", "cosine", "exponential"
             cumulative_coef: Coefficient for the cumulative reward shaping
             eval_env: If the environment is used for evaluation (Evaluation Environment is always one step ahead of the training environment)
-            n_steps: Number of steps in the environment, needed for evaluation Environments (No influence on training environments)
+            skip_steps: Number of steps in the environment, needed for evaluation Environments (No influence on training environments)
             gaussian_noise: Add gaussian noise to the day ahead prices and intra day prices
             noise_std: Standard deviation of the gaussian noise
         """
@@ -486,24 +502,24 @@ class DiscreteContinousEnergyArbitrageEnvironment(ContinousEnergyArbitrageEnviro
         self.discrete_to_continuous_array = np.fromiter(self.discrete_to_continuous.values(), dtype = float)
         # Call super constructor
         super().__init__(max_charge=max_charge,
-                            total_storage_capacity=total_storage_capacity,
-                            initial_charge=initial_charge,
-                            max_SOC=max_SOC,
-                            price_time_horizon=price_time_horizon,
-                            data_root_path=data_root_path,
-                            time_interval=time_interval,
-                            wandb_run=wandb_run,
-                            n_past_timesteps=n_past_timesteps,
-                            time_features=time_features,
-                            day_ahead_environment=day_ahead_environment,
-                            prediction_output=prediction_output,
-                            max_steps=max_steps,
-                            reward_shaping=reward_shaping,
-                            cumulative_coef=cumulative_coef,
-                            eval_env=eval_env,
-                            n_steps=n_steps,
-                            gaussian_noise=gaussian_noise,
-                            noise_std=noise_std)
+                         total_storage_capacity=total_storage_capacity,
+                         initial_charge=initial_charge,
+                         max_SOC=max_SOC,
+                         price_time_horizon=price_time_horizon,
+                         data_root_path=data_root_path,
+                         time_interval=time_interval,
+                         wandb_run=wandb_run,
+                         n_past_timesteps=n_past_timesteps,
+                         time_features=time_features,
+                         day_ahead_environment=day_ahead_environment,
+                         prediction_output=prediction_output,
+                         max_steps=max_steps,
+                         reward_shaping=reward_shaping,
+                         cumulative_coef=cumulative_coef,
+                         eval_env=eval_env,
+                         skip_steps=skip_steps,
+                         gaussian_noise=gaussian_noise,
+                         noise_std=noise_std)
 
         # Discretize the action space
     def valid_action_mask(self):
