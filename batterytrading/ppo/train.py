@@ -19,8 +19,7 @@ model_cfg, train_cfg = get_config("./ppo/cfg.yml")
 
 
 policy_type = model_cfg.pop("policy_type")
-
-if policy_type == "MlpPolicy":
+if policy_type == "MlpPolicyMasked":
     #model_cfg["policy"] = MultiInputPolicy
     model_cfg["policy"] = MaskableMultiInputActorCriticPolicy
     #model = PPO( **model_cfg)
@@ -28,14 +27,17 @@ if policy_type == "MlpPolicy":
     model_cfg.pop("use_sde")
     model_cfg["policy_kwargs"].pop("log_std_init")
     model = MaskablePPO(**model_cfg)
+elif policy_type == "MlpPolicy":
+    model_cfg["policy"] = MultiInputPolicy
+    #model_cfg["policy"] = MaskableMultiInputActorCriticPolicy
+    model = PPO(**model_cfg)
     print(">>>>>>>> Using  MLP-PPO<<<<<<<<")
-elif policy_type == "MlpLstmPolicy":
-    #model_cfg["policy"] = "CnnLstmPolicy"
+elif policy_type == "MlpLstmPolicyMasked":
     model_cfg["policy"] = MaskableRecurrentActorCriticPolicy #"MlpLstmPolicy"
     model = MaskableRecurrentPPO(**model_cfg)
-
-    #model_cfg["policy"] = "MlpLstmPolicy"
-    #model = RecurrentPPO(**model_cfg)
+elif policy_type == "MlpLstmPolicy":
+    model_cfg["policy"] = "MlpLstmPolicy"
+    model = RecurrentPPO(**model_cfg)
     print(">>>>>>>> Using Recurrent-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpPolicy":
     model_cfg["policy"] = ClampedActorCriticPolicy

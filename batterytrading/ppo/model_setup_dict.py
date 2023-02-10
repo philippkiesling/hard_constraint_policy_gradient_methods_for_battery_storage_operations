@@ -36,6 +36,7 @@ def get_config(config_path):
         (config, train_config) (tuple): config for ppo_model and training
     """
     DEBUG = sys_get_trace() is not None
+    #DEBUG= False
     cfg = yaml.safe_load(Path(config_path).read_text())
     model_config = cfg["model"]
     env_config = cfg["env"]
@@ -124,6 +125,8 @@ def _resolve_policy(model_config, env_config):
     """
 
     policy = model_config["policy"].lower()
+    if "masked" in policy:
+        invalid_action_mask = True
     if "clampedlstm" in policy:
         model_config["policy_type"] = "ClampedMlpLstmPolicy"
         lstm_kwargs = model_config["policy_kwargs"].pop("lstm_kwargs")
@@ -149,7 +152,10 @@ def _resolve_policy(model_config, env_config):
             model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
 
     elif "lstm" in policy:
-        model_config["policy_type"] = "MlpLstmPolicy"
+        if "masked" in policy:
+            model_config["policy_type"] = "MlpLstmPolicyMasked"
+        else:
+            model_config["policy_type"] = "MlpLstmPolicy"
         lstm_kwargs = model_config["policy_kwargs"].pop("lstm_kwargs")
         #model_config.pop("proj_coef")
         for key in lstm_kwargs:
@@ -172,7 +178,10 @@ def _resolve_policy(model_config, env_config):
         model_config.pop("proj_coef")
 
     else:
-        model_config["policy_type"] = "MlpPolicy"
+        if "masked" in policy:
+            model_config["policy_type"] = "MlpPolicyMasked"
+        else:
+            model_config["policy_type"] = "MlpPolicy"
         model_config["policy_kwargs"].pop("lstm_kwargs")
         #model_config.pop("proj_coef")
 
@@ -268,7 +277,6 @@ def _get_configured_env(env_config):
         env (object): environment
     """
     n_envs = env_config.pop("n_envs")
-    n_steps = env_config.pop("n_steps")
     #envs = [make_env(env_config.copy(), i) for i in range(1, 1 + n_envs)]
     envs = [make_env(env_config.copy(), i) for i in range(0,  n_envs)]
     #envs = [gym.make('CartPole-v1') for i in range(n_envs)]
@@ -285,18 +293,17 @@ def _get_configured_env(env_config):
         vec_env = envs[0]()
     #vec_env = SubprocVecEnv(envs, start_method='fork')
     env_config["eval_env"] = True
-    env_config["n_steps"] = n_steps
     env_config["gaussian_noise"] = False
     env_config["noise_std"] = -1
-    eval_env = make_env(env_config.copy(), 0)
+    eval_env = make_env(env_config.copy(), -1, n_envs = n_envs)
     eval_env = eval_env()
     return vec_env, eval_env
 
-def make_env(env_config, env_id):
+def make_env(env_config, env_id, n_envs= 1):
 
-    return lambda: _get_configured_single_env(env_config, env_id)
+    return lambda: _get_configured_single_env(env_config, env_id, n_envs)
 
-def _get_configured_single_env(env_config, env_id):
+def _get_configured_single_env(env_config, env_id, n_envs= 1):
     """
     creates environment with given config
     Args:
@@ -304,18 +311,23 @@ def _get_configured_single_env(env_config, env_id):
     Returns:
         env (object): environment
     """
-    #global env_preprocessing
-    #if env_preprocessing is None:
-    #    env_preprocessing = env_config.pop("preprocessing")
-    #if env_id >0:
-    #    env_config["wandb_run"] = None
-    #global first_env
+
+    # TODO: Set the tracked wandb run to the last environment
     if env_id > 0:
         env_config["wandb_run"] = None
     env_preprocessing = env_config.pop("preprocessing")
-
+    n_steps = env_config.pop("n_steps")
     EnergyArbitrageEnvironment = env_config.pop("type")
-    env = EnergyArbitrageEnvironment(**env_config)
+    n_envs = 1
+    #env_id = 1
+    if env_id == -1:
+        skip_steps = env_config.pop("skip_steps_interval")* (n_envs-1) + n_steps
+        print(f"Environment {env_id} (eval) skips steps {skip_steps}")
+    else:
+        skip_steps = env_config.pop("skip_steps_interval")* env_id
+        skip_steps = 0
+        print(f"Environment {env_id} skips steps {skip_steps}")
+    env = EnergyArbitrageEnvironment(**env_config, skip_steps=skip_steps)
 
     if isinstance( env.observation_space, gym.spaces.Dict):
         dict_env = True
