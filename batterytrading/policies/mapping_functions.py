@@ -62,20 +62,23 @@ def map_action_to_valid_space_cvxpy_layer(self, action_original, clamp_params):
     # print(clamp_params[0][:1]-1e-2, clamp_params[0][1:2] + 1e-2)
     # print("action", action, "clamp_params", clamp_params)
     try:
-        #action = action_original
+        action = action_original
 
-        action = self.projection_layer(action_original, clamp_params[:, :1] - 1e-3, clamp_params[:, 1:] + 1e-3)[0]
+        #action = self.projection_layer(action_original, clamp_params[:, :1] - 1e-3, clamp_params[:, 1:] + 1e-3)[0]
     except:
         print("Mapping Failed", "action", action_original, "clamp_params", clamp_params)
         action = action_original
     #projection_loss = self.projection_loss(action, action_original)
 
-    return action, action_original
+    return action#, action_original
 
 
 # Functions for Clamping the values
 def map_action_to_valid_space_clamp(self, action, clamp_params):
-    action = torch.clamp(action, clamp_params[0][0]-1e-3, clamp_params[0][1] + 1e-3)
+    action_original = action
+    #action = torch.clamp(action, action[0][0]-1e-3, clamp_params[0][1] + 1e-3)
+    action = torch.clamp(action, clamp_params[:, 0:1], clamp_params[:, 1:2])
+
     return action
 
 #
@@ -130,7 +133,7 @@ class ClampedDiagGaussianDistribution(DiagGaussianDistribution):
         :return:
         """
         # TODO: QUESTION - Can I create a distirbution here, that is automatically clamped?
-        # BENEFIT: Only Change in one spot required(Here) rather than  creating new ppor
+        # BENEFIT: Only Change in one spot required(Here) rather than  creating new ppo
         action_std = th.ones_like(mean_actions) * log_std.exp()
         self.distribution = Normal(mean_actions, action_std)
         return self

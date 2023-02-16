@@ -17,7 +17,7 @@ from batterytrading.wrappers import NormalizeObservationDict
 from stable_baselines3.common.callbacks import EvalCallback
 from batterytrading.policies.torch_layers import CustomLSTMExtractor
 from sb3_contrib.common.maskable.evaluation import evaluate_policy as evaluate_maskable_policy
-from maskable_recurrent.common.callbacks import EvalCallbackRecurrentActionMask, EvalCallbackRecurrentActionMask
+from maskable_recurrent.common.callbacks import EvalCallbackRecurrentActionMask, EvalCallbackActionMask
 
 def get_config(config_path):
     """
@@ -52,6 +52,7 @@ def get_config(config_path):
         wandb.save(config_path)
     else:
         run = None
+        env_config["n_envs"] = 2
     # create environment and add it to the model config
     env_config["n_steps"] = model_config["n_steps"]
     if "discrete" in model_config["env"].lower():
@@ -103,9 +104,15 @@ def get_config(config_path):
     model_config["policy_kwargs"]["features_extractor_class"] = CustomLSTMExtractor
     model_config["policy_kwargs"]["features_extractor_kwargs"] = {'features': ["features"]}
     # The Eval Callback is currently not working with invalid action masking
-    #eval_callback = EvalCallbackActionMask(eval_env, eval_freq=672, n_eval_episodes=1, warn=True, deterministic=True, render=False)
-    eval_callback = EvalCallbackRecurrentActionMask(eval_env, eval_freq=672, n_eval_episodes=1, warn=True, deterministic=True, render=False)
-    #eval_callback = EvalCallback(eval_env, eval_freq=672, n_eval_episodes=1, warn=True, deterministic=True, render=False)
+
+
+    if "MlpLstmPolicyMasked" == ["policy_type"]:
+        eval_callback = EvalCallbackRecurrentActionMask(eval_env, eval_freq=672, n_eval_episodes=1, warn=True,
+                                                        deterministic=True, render=False)
+    elif "MlpPolicyMasked" == ["policy_type"]:
+        eval_callback = EvalCallbackActionMask(eval_env, eval_freq=672, n_eval_episodes=1, warn=True, deterministic=True, render=False)
+    else:
+        eval_callback = EvalCallback(eval_env, eval_freq=672, n_eval_episodes=1, warn=True, deterministic=True, render=False)
 
     #eval_callback = EvalCallback(eval_env, eval_freq=672, n_eval_episodes = 1,  warn=True, deterministic=True, render=False)
     eval_callback.evaluate_policy = evaluate_maskable_policy
@@ -417,7 +424,6 @@ def _setup_pretraining(pretrain_config, env_config):
         pretrain_config["teacher_policy"] = teacher_policy
         return pretrain_config
 
-        return pretrain_config
 
 
 if __name__ == "__main__":

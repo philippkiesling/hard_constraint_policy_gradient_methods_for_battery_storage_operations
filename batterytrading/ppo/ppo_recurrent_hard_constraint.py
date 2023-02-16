@@ -91,7 +91,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             ent_coef: float = 0.0,
             vf_coef: float = 0.5,
             proj_coef: float = 10,
-            clip_range_proj = 0.01,
+            clip_range_proj = 0.2,
             max_grad_norm: float = 0.5,
             use_sde: bool = False,
             sde_sample_freq: int = -1,
@@ -261,7 +261,6 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             # Clip the actions to avoid out of bound error
             if isinstance(self.action_space, gym.spaces.Box):
                 clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
-                mu = np.clip(mu, self.action_space.low, self.action_space.high)
                 actions_original = np.clip(actions_original, self.action_space.low, self.action_space.high)
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
@@ -278,8 +277,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             if isinstance(self.action_space, gym.spaces.Discrete):
                 # Reshape in case of discrete action
                 actions = actions.reshape(-1, 1)
-                #actions_original = actions_original.reshape(-1, 1)
-                #mu = mu.reshape(-1, 1)
+                actions_original = actions_original.reshape(-1, 1)
             # Handle timeout by bootstraping with value function
             # see GitHub issue #633
             for idx, done_ in enumerate(dones):
@@ -355,7 +353,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                 actions = actions_and_original_action[:, :1]
                 #actions = actions_and_original_action
                 actions_original = actions_and_original_action[:, 1:2]
-                mu = actions_and_original_action[:, 2:3]
+                mu_original = actions_and_original_action[:, 2:3]
                 if isinstance(self.action_space, spaces.Discrete):
                     # Convert discrete action from float to long
                     actions = rollout_data.actions.long().flatten()
@@ -407,7 +405,6 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                 value_loss = th.mean(((rollout_data.returns - values_pred) ** 2)[mask])
 
                 value_losses.append(value_loss.item())
-
                 # Entropy loss favor exploration
                 if entropy is None:
                     # Approximate entropy when no analytical form
@@ -417,8 +414,8 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
-                clamped_actions = mu + th.clamp(mu - actions_original, -self.clip_range_proj, self.clip_range_proj)
-                action_loss = th.mean(((clamped_actions - mu) ** 2)[mask])
+                #clamped_actions = mu_original + th.clamp(actions - actions_original, -self.clip_range_proj, self.clip_range_proj)
+                action_loss = th.mean(((mu_original - actions) ** 2)[mask])
 
                 # loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
                 loss = policy_loss \
@@ -465,7 +462,6 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
         self.logger.record("train/action_loss", action_loss.item())
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
-
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
         if self.clip_range_vf is not None:

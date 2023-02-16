@@ -255,13 +255,31 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
         latent_pi = self.mlp_extractor.forward_actor(latent_pi)
         latent_vf = self.mlp_extractor.forward_critic(latent_vf)
-        distribution, mu, original_mu = self._get_action_dist_from_latent(latent_pi, action_bounds)
+
+        #distribution, mu, original_mu = self._get_action_dist_from_latent(latent_pi, action_bounds)
+        #action, log_prob, entropy = self.select_action(latent_pi, action_bounds)
+
+        #distribution, mu = self.get_distribution_torch(latent_pi)
+        #actions = distribution.sample()
+        if action_bounds == None:
+            mean_actions = self.action_net(latent_pi)
+        else:
+            mean_actions, original_mean = self.action_net(latent_pi, action_bounds)
+        distribution = self._get_action_dist_from_mean(mean_actions, latent_pi)
+
+        #action = action.squeeze()
+        if action_bounds is not None:
+            # In the evaluation we clamp the actions, since we do not need the gradient (in comparison to forward pass, where we use the projection layer (cvxpy)
+            actions = torch.clamp(actions, action_bounds[:, 0:1], action_bounds[:, 1:2])
+
+        log_prob = distribution.log_prob(actions)
+        entropy = distribution.entropy()
         #distribution = self._get_action_dist_from_latent(latent_pi)
         #actions, projection_loss = self.map_action_to_valid_space(self, actions, action_bounds) # clamp to action bounds
         #actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
-        log_prob = distribution.log_prob(actions)
+        #log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
-        return values, log_prob, distribution.entropy()
+        return values, log_prob, entropy
 
 
     def forward(
@@ -304,27 +322,102 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
         # Evaluate the values for the given observations
         values = self.value_net(latent_vf)
-        distribution, mu, original_mu = self._get_action_dist_from_latent(latent_pi, action_bounds)
-        actions = distribution.get_actions(deterministic=deterministic)
+        #action, log_prob, entropy = self.select_action(latent_pi, action_bounds)
+        #distribution, mu = self.get_distribution_torch(latent_pi)
+        if action_bounds == None:
+            mean_actions = self.action_net(latent_pi)
+        else:
+            mean_actions, original_mean = self.action_net(latent_pi, action_bounds)
+
+        mu_original = mean_actions.detach().clone()
+
+        distribution = self._get_action_dist_from_mean(mean_actions, latent_pi)
+        mu = distribution.get_actions(deterministic=True)
+        actions_original = distribution.sample()
+
+        if action_bounds is not None:
+            # In the evaluation we clamp the actions, since we do not need the gradient (in comparison to forward pass, where we use the projection layer (cvxpy)
+            actions = torch.clamp(actions_original, action_bounds[:, 0:1], action_bounds[:, 1:2])
+        else:
+            actions = actions_original
+        #actions  = self.map_action_to_valid_space(self, actions_original, action_bounds) # clamp to action bounds
+
+        log_prob = distribution.log_prob(actions)
+        actions_original = actions.detach().clone()
+        #actions_original, actions = actions, actions_original
+        #actions, action
+        #actions = actions_original
+        #actions = torch.clamp(actions, action_bounds[:, 0:1], action_bounds[:, 1:2])
+        #distribution = self._get_action_dist_from_latent(latent_pi)
+        #actions, projection_loss = self.map_action_to_valid_space(self, actions, action_bounds) # clamp to action bounds
+        #actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
+        #log_prob = distribution.log_prob(actions)
+        #distribution, mu, original_mu = self._get_action_dist_from_latent(latent_pi, action_bounds)
+        #actions = distribution.get_actions(deterministic=deterministic)
         #mu = distribution.get_actions(deterministic=True)
         #mu = torch.clamp(mu, action_bounds[:, 0], action_bounds[:, 1])
-        actions_original, actions_original = self.map_action_to_valid_space(self, actions, action_bounds)
+        #actions_original, actions_original = self.map_action_to_valid_space(self, actions, action_bounds)
         #actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
-        actions, _ = self.map_action_to_valid_space(self, actions_original, action_bounds)
-        log_prob = distribution.log_prob(actions)
+        #actions, actions_original = self.map_action_to_valid_space(self, actions, action_bounds)
+        #actions, actions_original = self.map_action_to_valid_space(self, actions )
+        #log_prob = distribution.log_prob(actions)
         #actions = self.map_action_to_valid_space(self, actions, action_bounds)
-        return actions, values, log_prob, RNNStates(lstm_states_pi, lstm_states_vf), actions_original, mu, original_mu
+        return actions, values, log_prob, RNNStates(lstm_states_pi, lstm_states_vf), actions_original, mu, mu_original
 
-    def _get_action_dist_from_latent(self, latent_pi: th.Tensor, action_bounds) -> Distribution:
+    def select_action(self, latent_pi, action_bounds = None):
+        mu = self.action_net(latent_pi)
+        sigma_sq = torch.exp(self.log_std)
+        from torch.distributions import MultivariateNormal
+        m = MultivariateNormal(mu, torch.diag(sigma_sq.squeeze()).unsqueeze(0))
+        action = m.sample()
+        if action_bounds is not None:
+            action = torch.clamp(action, min = action_bounds[0], max = action_bounds[1])
+        log_prob = m.log_prob(action)
+
+        return action, log_prob, m.entropy()
+    def get_distribution_torch(self, latent_pi):
+        mu = self.action_net(latent_pi)
+        sigma_sq = torch.exp(self.log_std)
+        from torch.distributions import MultivariateNormal
+        distribution = MultivariateNormal(mu, torch.diag(sigma_sq).unsqueeze(0))
+
+        return distribution, mu
+    def _get_action_dist_from_latent(self, latent_pi: th.Tensor, action_bounds = None) -> Distribution:
         """
         Retrieve action distribution given the latent codes.
 
         :param latent_pi: Latent code for the actor
         :return: Action distribution
         """
-        mean_actions, original_mean = self.action_net(latent_pi, action_bounds)
+        if action_bounds == None:
+            mean_actions = self.action_net(latent_pi)
+        else:
+            mean_actions, original_mean = self.action_net(latent_pi, action_bounds)
         if isinstance(self.action_dist, DiagGaussianDistribution):
-            return self.action_dist.proba_distribution(mean_actions, self.log_std), mean_actions, original_mean
+            return self.action_dist.proba_distribution(mean_actions, self.log_std)#, mean_actions, original_mean
+        elif isinstance(self.action_dist, CategoricalDistribution):
+            # Here mean_actions are the logits before the softmax
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, MultiCategoricalDistribution):
+            # Here mean_actions are the flattened logits
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, BernoulliDistribution):
+            # Here mean_actions are the logits (before rounding to get the binary actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, StateDependentNoiseDistribution):
+            return self.action_dist.proba_distribution(mean_actions, self.log_std, latent_pi)
+        else:
+            raise ValueError("Invalid action distribution")
+    def _get_action_dist_from_mean(self, mean_actions: th.Tensor, latent_pi) -> Distribution:
+        """
+        Retrieve action distribution given the latent codes.
+
+        :param latent_pi: Latent code for the actor
+        :return: Action distribution
+        """
+
+        if isinstance(self.action_dist, DiagGaussianDistribution):
+            return self.action_dist.proba_distribution(mean_actions, self.log_std)#, mean_actions, original_mean
         elif isinstance(self.action_dist, CategoricalDistribution):
             # Here mean_actions are the logits before the softmax
             return self.action_dist.proba_distribution(action_logits=mean_actions)
@@ -348,7 +441,7 @@ class ActionNet(nn.Module):
         self.mapping_layer = mapping_layer
         self.projection_layer = projection_layer
 
-    def forward(self, latent_pi, action_bounds) -> th.Tensor:
+    def forward(self, latent_pi, action_bounds = None) -> th.Tensor:
         """
         Forward pass for the action network.
 
@@ -356,10 +449,14 @@ class ActionNet(nn.Module):
         :return: Mean actions
         """
         mean_actions = self.net(latent_pi)
-        mean_actions, mean_actions_original = self.mapping_layer(self, mean_actions, action_bounds)
+        if action_bounds == None:
+            return mean_actions
+        else:
+            mean_actions_original = mean_actions
+            mean_actions = self.mapping_layer(self, mean_actions, action_bounds)
         #mean_actions, mean_actions_original = torch.clamp(mean_actions, action_bounds[0][0]-1e-3, action_bounds[0][1] + 1e-3)
 
-        return mean_actions, mean_actions_original
+            return mean_actions, mean_actions_original
 
 class ClampedMlpLstmPolicy(ValidOutputBaseRecurrentActorCriticPolicy):
     def __init__(self, *args, **kwargs):

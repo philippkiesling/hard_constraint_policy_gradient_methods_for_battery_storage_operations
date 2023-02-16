@@ -37,6 +37,8 @@ elif policy_type == "MlpLstmPolicyMasked":
     model = MaskableRecurrentPPO(**model_cfg)
 elif policy_type == "MlpLstmPolicy":
     model_cfg["policy"] = "MlpLstmPolicy"
+    model_cfg.pop("proj_coef")
+    model_cfg.pop("clip_range_proj")
     model = RecurrentPPO(**model_cfg)
     print(">>>>>>>> Using Recurrent-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpPolicy":
