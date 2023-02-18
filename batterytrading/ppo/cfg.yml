@@ -4,8 +4,8 @@ model:
   clip_range: 0.2 # 0.25
   clip_range_vf: 0.2
   proj_coef: 5.0 # set this to 0.0 to disable the projection loss
-  clip_range_proj: 0.2
-  ent_coef: 0.01 # 0.05-0.01 0.005
+  clip_range_proj: 99.0
+  ent_coef: 0.1 # 0.05-0.01 0.005
   env: "continuous" # discrete" # "continuous" # "discrete"
   gae_lambda: 0.95
   gamma: 0.99 # 0.99
@@ -19,13 +19,13 @@ model:
   #policy: 'MlpPolicy'
   #policy: 'MlpPolicyMasked'
   #policy: 'linearprojected'
-  policy: 'clampedlstm'
+  #policy: 'clampedlstm'
   #policy: 'clampedmlp'
-  #policy: 'linearprojectedlstm'
+  policy: 'linearprojectedlstm'
   #policy: ActivationFunctionProjectedMlpLstmPolicy
   normalize_advantage: True
   sde_sample_freq: -1 # Should be switched for basic functionalities
-  use_sde: True  # Should be switched for basic functionalities
+  use_sde: False  # Should be switched for basic functionalities
   tensorboard_log: .log/log_tb/
   verbose: 1
   target_kl:  #0.8 # Higher Value? because Early Stopping kicks in?
@@ -45,7 +45,7 @@ model:
         #bidirectional: True
   pretrain: False
 train:
-  total_timesteps: 2500000 # We have: 250000, when we want to train with 5 envs we need 1250000 = 250000 * 5
+  total_timesteps: 4000000 # We have: 250000, when we want to train with 5 envs we need 1250000 = 250000 * 5
   eval_freq: 10
   log_interval: 1
 
@@ -82,7 +82,7 @@ env:
 wandb:
   use_wandb: True
   project: "batterytrading_tuneprojections"
-  name: "clamp_maptovalid_calmpineval_mapafterLOGPROB_cliprange0.2_proj5_projclip0.2"
+  name: "linearprojection_without_clampprojection_cliprangeproj99.0"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/modelNormalizeObservationPartiallys

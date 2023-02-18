@@ -6,7 +6,7 @@ from batterytrading.ppo import RecurrentPPOHardConstraints
 #    ClampedActorCriticPolicy, \
 #    LinearProjectedMlpLstmPolicy, \
 #    ActivationFunctionProjectedMlpLstmPolicy
-from batterytrading.policies.recurrent_policies_dict import ClampedMlpLstmPolicy, LinearProjectedMlpLstmPolicy
+from batterytrading.policies.recurrent_policies_dict import ClampedMlpLstmPolicy, LinearProjectedMlpLstmPolicy, ActivationFunctionProjectedMlpLstmPolicy
 from batterytrading.ppo.model_setup_dict import get_config
 #from batterytrading.ppo.policies import
 from stable_baselines3.ppo import MultiInputPolicy

@@ -89,6 +89,9 @@ def map_action_to_valid_space_activationfn(self, action, clamp_params):
     action = torch.sigmoid(action) * (max_value - min_value)
     return action
 
+def map_action_to_valid_space_dummy(self, action, clamp_params):
+    return action
+
 def map_action_to_valid_space_activationtanh(self, action, clamp_params):
     action_space_low, action_space_high = clamp_params[0][0], clamp_params[0][1]
     # Add a linear layer to the action to allow it to have negative values

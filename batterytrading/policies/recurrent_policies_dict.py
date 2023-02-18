@@ -25,7 +25,8 @@ from batterytrading.policies.mapping_functions import map_action_to_valid_space_
     map_action_to_valid_space_clamp, \
     construct_optimization_layer_dummy, \
     map_action_to_valid_space_activationfn, \
-    map_action_to_valid_space_activationtanh
+    map_action_to_valid_space_activationtanh, \
+    map_action_to_valid_space_dummy
 from abc import abstractmethod, ABC
 import gym
 from sb3_contrib.ppo_recurrent.policies import MlpLstmPolicy, MultiInputLstmPolicy
@@ -226,8 +227,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         obs: th.Tensor,
         actions: th.Tensor,
         lstm_states: RNNStates,
-        episode_starts: th.Tensor
-
+        episode_starts: th.Tensor,
     ) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Evaluate actions according to the current policy,
@@ -256,31 +256,25 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         latent_pi = self.mlp_extractor.forward_actor(latent_pi)
         latent_vf = self.mlp_extractor.forward_critic(latent_vf)
 
-        #distribution, mu, original_mu = self._get_action_dist_from_latent(latent_pi, action_bounds)
-        #action, log_prob, entropy = self.select_action(latent_pi, action_bounds)
-
-        #distribution, mu = self.get_distribution_torch(latent_pi)
-        #actions = distribution.sample()
-        if action_bounds == None:
+        #if action_bounds == None:
+        if True:
             mean_actions = self.action_net(latent_pi)
+            #print("No action_bounds specified")
         else:
-            mean_actions, original_mean = self.action_net(latent_pi, action_bounds)
+            mean_actions  = self.action_net(latent_pi)
+            mean_actions = torch.clamp(mean_actions, action_bounds[:, 0:1], action_bounds[:, 1:2])
+
         distribution = self._get_action_dist_from_mean(mean_actions, latent_pi)
-
-        #action = action.squeeze()
-        if action_bounds is not None:
-            # In the evaluation we clamp the actions, since we do not need the gradient (in comparison to forward pass, where we use the projection layer (cvxpy)
-            actions = torch.clamp(actions, action_bounds[:, 0:1], action_bounds[:, 1:2])
-
-        log_prob = distribution.log_prob(actions)
-        entropy = distribution.entropy()
-        #distribution = self._get_action_dist_from_latent(latent_pi)
-        #actions, projection_loss = self.map_action_to_valid_space(self, actions, action_bounds) # clamp to action bounds
-        #actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
+        #distribution = self.get_distribution_torch(mean_actions)
         #log_prob = distribution.log_prob(actions)
+        #mask_high = actions == action_bounds[:, 1:]
+        #mask_low = actions == action_bounds[:, 0:1]
+        #mask_middle =  torch.logical_not(mask_high + mask_low)
+        #log_prob = mask_high * (torch.log(1 - distribution.cdf(actions))) + mask_low * torch.log(distribution.cdf(actions)) + mask_middle * distribution.log_prob(actions)
+        log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
+        entropy = distribution.entropy()
         return values, log_prob, entropy
-
 
     def forward(
         self,
@@ -299,8 +293,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         :param deterministic: Whether to sample or use deterministic actions
         :return: action, value and log probability of the action
         """
-        #obs = torch.rand(obs.shape)
-        #bounds = self.env_reference.bounds
+        # Preprocess the observation if needed
         features = obs["features"]
         action_bounds = obs["action_bounds"]
         features = self.extract_features(obs)
@@ -322,66 +315,53 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
         # Evaluate the values for the given observations
         values = self.value_net(latent_vf)
-        #action, log_prob, entropy = self.select_action(latent_pi, action_bounds)
-        #distribution, mu = self.get_distribution_torch(latent_pi)
+
         if action_bounds == None:
             mean_actions = self.action_net(latent_pi)
+            print("No bounds Specified")
         else:
-            mean_actions, original_mean = self.action_net(latent_pi, action_bounds)
-
-        mu_original = mean_actions.detach().clone()
-
-        distribution = self._get_action_dist_from_mean(mean_actions, latent_pi)
-        mu = distribution.get_actions(deterministic=True)
-        actions_original = distribution.sample()
+            mu, mu_original = self.action_net(latent_pi, action_bounds)
+        #distribution  = self.get_distribution_torch(mu)
+        #actions_original = distribution.sample()
+        distribution = self._get_action_dist_from_mean(mu, latent_pi)
+        actions_original = distribution.get_actions(deterministic=deterministic)
 
         if action_bounds is not None:
             # In the evaluation we clamp the actions, since we do not need the gradient (in comparison to forward pass, where we use the projection layer (cvxpy)
             actions = torch.clamp(actions_original, action_bounds[:, 0:1], action_bounds[:, 1:2])
-        else:
-            actions = actions_original
-        #actions  = self.map_action_to_valid_space(self, actions_original, action_bounds) # clamp to action bounds
 
+        #mask_high = actions == action_bounds[:, 1:]
+        #mask_low = actions == action_bounds[:, 0:1]
+        #mask_middle =  torch.logical_not(mask_high + mask_low)
+        #log_prob = mask_high * (torch.log(1 - distribution.cdf(actions))) + mask_low * torch.log(distribution.cdf(actions)) + mask_middle * distribution.log_prob(actions)
+        #log_prob = log_prob.squeeze()
         log_prob = distribution.log_prob(actions)
-        actions_original = actions.detach().clone()
-        #actions_original, actions = actions, actions_original
-        #actions, action
-        #actions = actions_original
-        #actions = torch.clamp(actions, action_bounds[:, 0:1], action_bounds[:, 1:2])
-        #distribution = self._get_action_dist_from_latent(latent_pi)
-        #actions, projection_loss = self.map_action_to_valid_space(self, actions, action_bounds) # clamp to action bounds
-        #actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
-        #log_prob = distribution.log_prob(actions)
-        #distribution, mu, original_mu = self._get_action_dist_from_latent(latent_pi, action_bounds)
-        #actions = distribution.get_actions(deterministic=deterministic)
-        #mu = distribution.get_actions(deterministic=True)
-        #mu = torch.clamp(mu, action_bounds[:, 0], action_bounds[:, 1])
-        #actions_original, actions_original = self.map_action_to_valid_space(self, actions, action_bounds)
-        #actions = torch.clamp(actions, action_bounds[:, 0], action_bounds[:, 1])
-        #actions, actions_original = self.map_action_to_valid_space(self, actions, action_bounds)
-        #actions, actions_original = self.map_action_to_valid_space(self, actions )
-        #log_prob = distribution.log_prob(actions)
-        #actions = self.map_action_to_valid_space(self, actions, action_bounds)
         return actions, values, log_prob, RNNStates(lstm_states_pi, lstm_states_vf), actions_original, mu, mu_original
+
+
+
 
     def select_action(self, latent_pi, action_bounds = None):
         mu = self.action_net(latent_pi)
         sigma_sq = torch.exp(self.log_std)
-        from torch.distributions import MultivariateNormal
-        m = MultivariateNormal(mu, torch.diag(sigma_sq.squeeze()).unsqueeze(0))
+        from torch.distributions import MultivariateNormal, Normal
+        m = Normal(mu, sigma_sq.squeeze())
+        #m = MultivariateNormal(mu, torch.diag(sigma_sq.squeeze()).unsqueeze(0))
         action = m.sample()
         if action_bounds is not None:
             action = torch.clamp(action, min = action_bounds[0], max = action_bounds[1])
         log_prob = m.log_prob(action)
 
         return action, log_prob, m.entropy()
-    def get_distribution_torch(self, latent_pi):
-        mu = self.action_net(latent_pi)
+    def get_distribution_torch(self, mu):
+        #mu = self.action_net(latent_pi)
         sigma_sq = torch.exp(self.log_std)
-        from torch.distributions import MultivariateNormal
-        distribution = MultivariateNormal(mu, torch.diag(sigma_sq).unsqueeze(0))
 
-        return distribution, mu
+        from torch.distributions import MultivariateNormal, Normal
+        distribution = Normal(mu, sigma_sq.squeeze())
+        #distribution = MultivariateNormal(mu, torch.diag(sigma_sq).unsqueeze(0))
+
+        return distribution
     def _get_action_dist_from_latent(self, latent_pi: th.Tensor, action_bounds = None) -> Distribution:
         """
         Retrieve action distribution given the latent codes.
@@ -439,6 +419,7 @@ class ActionNet(nn.Module):
         super(ActionNet, self).__init__()
         self.net = action_net
         self.mapping_layer = mapping_layer
+        #self.linear = nn.Linear(1, 1)
         self.projection_layer = projection_layer
 
     def forward(self, latent_pi, action_bounds = None) -> th.Tensor:
@@ -448,12 +429,13 @@ class ActionNet(nn.Module):
         :param latent_pi: Latent code for the actor
         :return: Mean actions
         """
-        mean_actions = self.net(latent_pi)
+        mean_actions_original = self.net(latent_pi)
+        #mean_actions_original = self.linear(mean_actions_original)
         if action_bounds == None:
-            return mean_actions
+            return mean_actions_original
         else:
-            mean_actions_original = mean_actions
-            mean_actions = self.mapping_layer(self, mean_actions, action_bounds)
+            from copy import deepcopy
+            mean_actions = self.mapping_layer(self, mean_actions_original, action_bounds)
         #mean_actions, mean_actions_original = torch.clamp(mean_actions, action_bounds[0][0]-1e-3, action_bounds[0][1] + 1e-3)
 
             return mean_actions, mean_actions_original
@@ -470,9 +452,17 @@ class LinearProjectedMlpLstmPolicy(ValidOutputBaseRecurrentActorCriticPolicy):
         self.construct_optimization_layer = construct_cvxpy_optimization_layer
         super(LinearProjectedMlpLstmPolicy, self).__init__(*args, **kwargs)
         
+#class ActivationFunctionProjectedMlpLstmPolicy(ValidOutputBaseRecurrentActorCriticPolicy):
+#    def __init__(self, *args, **kwargs):
+#        self.map_action_to_valid_space = map_action_to_valid_space_activationtanh
+#        self.construct_optimization_layer = construct_optimization_layer_dummy
+#
+#        super(ActivationFunctionProjectedMlpLstmPolicy, self).__init__(*args, **kwargs)
+
+
 class ActivationFunctionProjectedMlpLstmPolicy(ValidOutputBaseRecurrentActorCriticPolicy):
     def __init__(self, *args, **kwargs):
-        self.map_action_to_valid_space = map_action_to_valid_space_activationtanh
+        self.map_action_to_valid_space = map_action_to_valid_space_activationfn
         self.construct_optimization_layer = construct_optimization_layer_dummy
 
         super(ActivationFunctionProjectedMlpLstmPolicy, self).__init__(*args, **kwargs)

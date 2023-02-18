@@ -105,6 +105,7 @@ class ValidOutputBaseActorCriticPolicy(ActorCriticPolicy):
         features = features[:, :-2]
         latent_pi, latent_vf = self.mlp_extractor(features)
         distribution = self._get_action_dist_from_latent(latent_pi)
+
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
         return values, log_prob, distribution.entropy()

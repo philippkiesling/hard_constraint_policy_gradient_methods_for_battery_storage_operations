@@ -250,7 +250,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 episode_starts = th.tensor(self._last_episode_starts).float().to(self.device)
-                actions, values, log_probs, lstm_states, actions_original, mu, original_mu = self.policy.forward(obs_tensor, lstm_states, episode_starts)
+                actions, values, log_probs, lstm_states, actions_original, mu, original_mu = self.policy.forward(obs_tensor, lstm_states, episode_starts, deterministic=False)
                 #actions, values, log_probs, lstm_states = self.policy.forward(obs_tensor, lstm_states, episode_starts)
 
             actions = actions.cpu().numpy()
@@ -356,7 +356,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                 mu_original = actions_and_original_action[:, 2:3]
                 if isinstance(self.action_space, spaces.Discrete):
                     # Convert discrete action from float to long
-                    actions = rollout_data.actions.long().flatten()
+                    actions = actions.long().flatten() #rollout_data.actions.long().flatten()
 
                 # Convert mask from float to bool
                 mask = rollout_data.mask > 1e-8
@@ -414,9 +414,10 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
-                #clamped_actions = mu_original + th.clamp(actions - actions_original, -self.clip_range_proj, self.clip_range_proj)
-                action_loss = th.mean(((mu_original - actions) ** 2)[mask])
-
+                # Calculate action loss
+                action_loss_original = th.mean(((mu_original - actions) ** 2)[mask])
+                # Clip action loss with clip_range_proj
+                action_loss = th.clamp(action_loss_original, -self.clip_range_proj, self.clip_range_proj)
                 # loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
                 loss = policy_loss \
                        + self.ent_coef * entropy_loss \
@@ -459,7 +460,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
-        self.logger.record("train/action_loss", action_loss.item())
+        self.logger.record("train/action_loss", action_loss_original.item())
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
