@@ -1,4 +1,3 @@
-import gym
 from stable_baselines3.common.policies import ActorCriticPolicy
 import torch
 from sb3_contrib.common.recurrent.type_aliases import RNNStates
@@ -17,20 +16,16 @@ from stable_baselines3.common.distributions import (
     Distribution,
     MultiCategoricalDistribution,
     StateDependentNoiseDistribution,
-    make_proba_distribution,
 )
 #
 from batterytrading.policies.mapping_functions import map_action_to_valid_space_cvxpy_layer, \
     construct_cvxpy_optimization_layer, \
     map_action_to_valid_space_clamp, \
     construct_optimization_layer_dummy, \
-    map_action_to_valid_space_activationfn, \
-    map_action_to_valid_space_activationtanh, \
-    map_action_to_valid_space_dummy
-from abc import abstractmethod, ABC
+    map_action_to_valid_space_activationfn
 import gym
-from sb3_contrib.ppo_recurrent.policies import MlpLstmPolicy, MultiInputLstmPolicy
-from batterytrading.policies.torch_layers import CustomLSTMExtractor
+from sb3_contrib.ppo_recurrent.policies import MlpLstmPolicy
+from batterytrading.policies.torch_layers import FilterForFeaturesExtractor, ActionNet
 import torch as th
 class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
     """
@@ -100,15 +95,9 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         shared_lstm: bool = False,
         enable_critic_lstm: bool = True,
         lstm_kwargs: Optional[Dict[str, Any]] = None,
-        pretrain=None,
-        bounds=(0,0),
-        #env_reference = None
     ):
-        bounds = bounds
-        features_extractor_class = CustomLSTMExtractor
+        features_extractor_class = FilterForFeaturesExtractor
         features_extractor_kwargs = {'features':["features"]}
-
-
         super(ValidOutputBaseRecurrentActorCriticPolicy, self).__init__(
             observation_space,
             action_space,
@@ -133,17 +122,6 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
             enable_critic_lstm,
             lstm_kwargs)
 
-        if pretrain is not None:
-            #self.load_state_dict(torch.load(pretrain))
-            #self.pretrain_mlp_extractor(**pretrain)
-            print("Using pretrained model")
-            pretrained_model = ActorCriticPolicy.load("./batterytrading/models/test_model")
-            self.action_net = pretrained_model.action_net
-            self.value_net = pretrained_model.value_net
-            self.mlp_extractor = pretrained_model.mlp_extractor
-            self.features_extractor = pretrained_model.features_extractor
-
-        #self.standard_forward = self.forward_pass_standard
         self.projection_layer = self.construct_optimization_layer(self)
         # Overwrite the default feature dimensions of the LSTM
 
@@ -242,8 +220,8 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
             and entropy of the action distribution.
         """
         # Preprocess the observation if needed
-        action_bounds = obs["action_bounds"]
         features = self.extract_features(obs)
+        action_bounds = obs["action_bounds"]
         latent_pi, _ = self._process_sequence(features, lstm_states.pi, episode_starts, self.lstm_actor)
 
         if self.lstm_critic is not None:
@@ -340,24 +318,11 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
 
 
-
-    def select_action(self, latent_pi, action_bounds = None):
-        mu = self.action_net(latent_pi)
-        sigma_sq = torch.exp(self.log_std)
-        from torch.distributions import MultivariateNormal, Normal
-        m = Normal(mu, sigma_sq.squeeze())
-        #m = MultivariateNormal(mu, torch.diag(sigma_sq.squeeze()).unsqueeze(0))
-        action = m.sample()
-        if action_bounds is not None:
-            action = torch.clamp(action, min = action_bounds[0], max = action_bounds[1])
-        log_prob = m.log_prob(action)
-
-        return action, log_prob, m.entropy()
     def get_distribution_torch(self, mu):
         #mu = self.action_net(latent_pi)
         sigma_sq = torch.exp(self.log_std)
 
-        from torch.distributions import MultivariateNormal, Normal
+        from torch.distributions import Normal
         distribution = Normal(mu, sigma_sq.squeeze())
         #distribution = MultivariateNormal(mu, torch.diag(sigma_sq).unsqueeze(0))
 
@@ -412,33 +377,6 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         else:
             raise ValueError("Invalid action distribution")
 
-
-class ActionNet(nn.Module):
-    def __init__(self, action_net, projection_layer, mapping_layer):
-
-        super(ActionNet, self).__init__()
-        self.net = action_net
-        self.mapping_layer = mapping_layer
-        #self.linear = nn.Linear(1, 1)
-        self.projection_layer = projection_layer
-
-    def forward(self, latent_pi, action_bounds = None) -> th.Tensor:
-        """
-        Forward pass for the action network.
-
-        :param latent_pi: Latent code for the actor
-        :return: Mean actions
-        """
-        mean_actions_original = self.net(latent_pi)
-        #mean_actions_original = self.linear(mean_actions_original)
-        if action_bounds == None:
-            return mean_actions_original
-        else:
-            from copy import deepcopy
-            mean_actions = self.mapping_layer(self, mean_actions_original, action_bounds)
-        #mean_actions, mean_actions_original = torch.clamp(mean_actions, action_bounds[0][0]-1e-3, action_bounds[0][1] + 1e-3)
-
-            return mean_actions, mean_actions_original
 
 class ClampedMlpLstmPolicy(ValidOutputBaseRecurrentActorCriticPolicy):
     def __init__(self, *args, **kwargs):

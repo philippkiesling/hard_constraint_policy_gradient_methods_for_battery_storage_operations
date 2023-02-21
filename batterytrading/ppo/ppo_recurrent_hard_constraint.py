@@ -16,6 +16,7 @@ from stable_baselines3.common.utils import explained_variance, get_schedule_fn, 
 from stable_baselines3.common.vec_env import VecEnv
 
 from sb3_contrib.common.recurrent.buffers import RecurrentDictRolloutBuffer, RecurrentRolloutBuffer
+from batterytrading.common.buffers import ClampedRecurrentRolloutBuffer, ClampedRecurrentDictRolloutBuffer
 from sb3_contrib.common.recurrent.policies import RecurrentActorCriticPolicy
 from sb3_contrib.common.recurrent.type_aliases import RNNStates
 from sb3_contrib.ppo_recurrent.policies import CnnLstmPolicy, MlpLstmPolicy, MultiInputLstmPolicy
@@ -149,8 +150,9 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
         self.set_random_seed(self.seed)
 
         buffer_cls = (
-            RecurrentDictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else RecurrentRolloutBuffer
+            ClampedRecurrentDictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else ClampedRecurrentRolloutBuffer
         )
+
 
         self.policy = self.policy_class(
             self.observation_space,
@@ -186,8 +188,8 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
         self.rollout_buffer = buffer_cls(
             self.n_steps,
             self.observation_space,
-            #self.action_space,
-            gym.spaces.box.Box(-1, 1, shape=(3,)),
+            self.action_space,
+            #gym.spaces.box.Box(-1, 1, shape=(3,)),
             hidden_state_buffer_shape,
             self.device,
             gamma=self.gamma,
@@ -224,7 +226,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             collected, False if callback terminated rollout prematurely.
         """
         assert isinstance(
-            rollout_buffer, (RecurrentRolloutBuffer, RecurrentDictRolloutBuffer)
+            rollout_buffer, (ClampedRecurrentRolloutBuffer, ClampedRecurrentDictRolloutBuffer)
         ), f"{rollout_buffer} doesn't support recurrent policy"
 
         assert self._last_obs is not None, "No previous observation was provided"
@@ -300,12 +302,14 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             rollout_buffer.add(
                 self._last_obs,
                 #actions,
-                np.hstack([actions, actions_original, original_mu]),
+                actions,
                 rewards,
                 self._last_episode_starts,
                 values,
                 log_probs,
                 lstm_states=self._last_lstm_states,
+                original_actions=actions_original,
+                original_mu = original_mu,
             )
 
             self._last_obs = new_obs
@@ -349,11 +353,9 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             # Do a complete pass on the rollout buffer
             for rollout_data in self.rollout_buffer.get(self.batch_size):
                 # print("idx ", idx, "proj_loss",  "proj_losses.shape", len(self.proj_losses), "epoch", epoch)
-                actions_and_original_action = rollout_data.actions
-                actions = actions_and_original_action[:, :1]
-                #actions = actions_and_original_action
-                actions_original = actions_and_original_action[:, 1:2]
-                mu_original = actions_and_original_action[:, 2:3]
+                actions = rollout_data.actions
+                mu_original = rollout_data.original_mu
+                original_actions = rollout_data.original_actions
                 if isinstance(self.action_space, spaces.Discrete):
                     # Convert discrete action from float to long
                     actions = actions.long().flatten() #rollout_data.actions.long().flatten()
