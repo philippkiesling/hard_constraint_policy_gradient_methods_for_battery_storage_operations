@@ -46,6 +46,12 @@ def get_config(config_path):
         wandb.save(config_path)
     else:
         run = None
+    from batterytrading.environment.environment import Environment
+    if "discrete" in model_config["env"].lower():
+        env_config["type"] = Environment
+    else:
+        env_config["type"] = Environment
+
     n_envs = env_config["n_envs"]
     # create environment and add it to the model config
     if model_config["env"] == "BatteryStorageEnv":
@@ -260,6 +266,7 @@ def _get_configured_single_env(env_config, env_id):
     if env_id > 0:
         env_config["wandb_run"] = None
     env_preprocessing = env_config.pop("preprocessing")
+    env_config.pop("type")
     env = Environment(**env_config)
     #env_additional = Environment(**env_config)
     if env_preprocessing["clipaction"]:

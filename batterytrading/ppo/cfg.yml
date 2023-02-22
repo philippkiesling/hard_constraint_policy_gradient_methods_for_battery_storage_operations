@@ -3,14 +3,14 @@ model:
   batch_size: 64
   clip_range: 0.2 # 0.25
   clip_range_vf: 0.2
-  proj_coef: 0.0 #10.0 #3.0 # set this to 0.0 to disable the projection loss
+  proj_coef: 10.0 #10.0 #3.0 # set this to 0.0 to disable the projection loss
   clip_range_proj: 0.2 # 0.1
   ent_coef: 0.01 # 0.05-0.01 0.005
   env: "continuous" #"continuous" # discrete" # "continuous" # "discrete"
   gae_lambda: 0.95
   gamma: 0.99 # 0.99
   learning_rate: 'cosine' # schedule of the learning rate (can be cosine, linear, constant)
-  lr_base: 1e-4
+  lr_base: 5e-5
   max_grad_norm: 0.5
   n_epochs: 10
   n_steps: 672 # 96 # 24 (hour/day) * 4 (intervals/hour) * 7 (days/week) * 4 (weeks)
@@ -19,9 +19,9 @@ model:
   #policy: 'MlpPolicy'
   #policy: 'MlpPolicyMasked'
   #policy: 'linearprojected'
-  policy: 'clampedlstm'
+  #policy: 'clampedlstm'
   #policy: 'clampedmlp'
-  #policy: 'linearprojectedlstm'
+  policy: 'linearprojectedlstm'
   #policy: ActivationFunctionProjectedMlpLstmPolicy
   normalize_advantage: True
   sde_sample_freq: -1 # Should be switched for basic functionalities
@@ -45,7 +45,7 @@ model:
         #bidirectional: True
   pretrain: False
 train:
-  total_timesteps: 12500000 # We have: 250000, when we want to train with 5 envs we need 1250000 = 250000 * 5
+  total_timesteps: 10000000 #12500000 # We have: 250000, when we want to train with 5 envs we need 1250000 = 250000 * 5
   eval_freq: 10
   log_interval: 1
 
@@ -81,8 +81,8 @@ env:
   noise_std: None
 wandb:
   use_wandb: True
-  project: "batterytrading_tuneprojections"
-  name: "Clamped_RPPO_New_RolloutBuffer"
+  project: "batterytrading_tuneprojections" #"batterytrading_evaluation"
+  name: "LinearProjectedLSTM_RPPO_NEWACTIONBOUND"
   resume: "allow"
   sync_tensorboard: True
   model_save_path: .log/wandb/modelNormalizeObservationPartiallys

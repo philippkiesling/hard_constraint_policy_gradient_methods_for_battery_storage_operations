@@ -5,7 +5,9 @@ from sys import gettrace as sys_get_trace
 
 import yaml
 from pathlib import Path
-from batterytrading.environment.environment_dict import ContinousEnergyArbitrageEnvironment, DiscreteContinousEnergyArbitrageEnvironment#, NormalizeObservationPartially, RandomSamplePretrainingEnv
+from batterytrading.environment.environment_dict import ContinousEnergyArbitrage_Solar_Environment, \
+    ContinousEnergyArbitrageEnvironment, \
+    DiscreteContinousEnergyArbitrageEnvironment#, NormalizeObservationPartially, RandomSamplePretrainingEnv
 import wandb
 from wandb.integration.sb3 import WandbCallback
 import torch.nn as nn
@@ -15,7 +17,7 @@ from batterytrading.baselines import BaselineModel
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 from batterytrading.wrappers import NormalizeObservationDict
 from stable_baselines3.common.callbacks import EvalCallback
-from batterytrading.policies.torch_layers import CustomLSTMExtractor
+from batterytrading.policies.torch_layers import FilterForFeaturesExtractor
 from sb3_contrib.common.maskable.evaluation import evaluate_policy as evaluate_maskable_policy
 from maskable_recurrent.common.callbacks import EvalCallbackRecurrentActionMask, EvalCallbackActionMask
 
@@ -101,7 +103,7 @@ def get_config(config_path):
     # setup pretraining DEPRICATED PRETRAINING
     # model_config["policy_kwargs"]["pretrain"] = _setup_pretraining(model_config["policy_kwargs"]["pretrain"], env_config)
 
-    model_config["policy_kwargs"]["features_extractor_class"] = CustomLSTMExtractor
+    model_config["policy_kwargs"]["features_extractor_class"] = FilterForFeaturesExtractor
     model_config["policy_kwargs"]["features_extractor_kwargs"] = {'features': ["features"]}
     # The Eval Callback is currently not working with invalid action masking
 
@@ -141,14 +143,14 @@ def _resolve_policy(model_config, env_config):
         for key in lstm_kwargs:
             model_config["policy_kwargs"][key] = lstm_kwargs[key]
         model_config["policy_kwargs"]
-        model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
+        #model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
     elif "activationfunction" in policy:
         model_config["policy_type"] = "ActivationFunctionProjectedMlpLstmPolicy"
         lstm_kwargs = model_config["policy_kwargs"].pop("lstm_kwargs")
         #model_config["policy_kwargs"]["env_reference"] = model_config["env"]
         for key in lstm_kwargs:
             model_config["policy_kwargs"][key] = lstm_kwargs[key]
-        model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
+        #model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
 
     elif "linearprojectedlstm" in policy:
         model_config["policy_type"] = "LinearProjectedMlpLstmPolicy"
@@ -156,7 +158,7 @@ def _resolve_policy(model_config, env_config):
         lstm_kwargs = model_config["policy_kwargs"].pop("lstm_kwargs")
         for key in lstm_kwargs:
             model_config["policy_kwargs"][key] = lstm_kwargs[key]
-            model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
+            #model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
 
     elif "lstm" in policy:
         if "masked" in policy:
@@ -171,12 +173,12 @@ def _resolve_policy(model_config, env_config):
     elif "clampedmlp" in policy:
         model_config["policy_type"] = "ClampedMlpPolicy"
         model_config["policy_kwargs"].pop("lstm_kwargs")
-        model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
+        #model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
 
     elif "linearprojected" in policy:
         model_config["policy_type"] = "LinearProjectedMlpPolicy"
         model_config["policy_kwargs"].pop("lstm_kwargs")
-        model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
+        #model_config["policy_kwargs"]["bounds"] = (- env_config["max_charge"], env_config["max_charge"])
 
     elif "linear" in policy:
         model_config["policy_type"] = "LinearPolicy"

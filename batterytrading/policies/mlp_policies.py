@@ -1,4 +1,16 @@
 from stable_baselines3.common.policies import ActorCriticPolicy
+# import ActionNet from batterytrading.policies.action_net import ActionNet
+from batterytrading.policies.torch_layers import ActionNet
+from stable_baselines3.common.distributions import (
+    BernoulliDistribution,
+    CategoricalDistribution,
+    DiagGaussianDistribution,
+    Distribution,
+    MultiCategoricalDistribution,
+    StateDependentNoiseDistribution,
+)
+
+from batterytrading.policies.torch_layers import FilterForFeaturesExtractor, ActionNet
 import torch
 from sb3_contrib.common.recurrent.type_aliases import RNNStates
 import torch.nn as nn
@@ -8,6 +20,7 @@ from stable_baselines3.common.torch_layers import (
     BaseFeaturesExtractor,
     FlattenExtractor,
 )
+
 
 from abc import ABC, abstractmethod
 import gym
@@ -30,21 +43,15 @@ class ValidOutputBaseActorCriticPolicy(ActorCriticPolicy):
     def __init__(self,  *args, pretrain = None, **kwargs):
         bounds = kwargs.pop("bounds")
         super(ValidOutputBaseActorCriticPolicy, self).__init__(*args, **kwargs)
-        self.low = bounds[0]
-        self.high = bounds[1]
-        self.observation_space = gym.spaces.Box(low=-100, high=1000, shape=(self.features_dim - 2,))
-        if pretrain is not None:
-            #self.load_state_dict(torch.load(pretrain))
-            #self.pretrain_mlp_extractor(**pretrain)
-            pretrained_model = ActorCriticPolicy.load("./batterytrading/models/test_model")
-            self.action_net = pretrained_model.action_net
-            self.value_net = pretrained_model.value_net
-            self.mlp_extractor = pretrained_model.mlp_extractor
-            self.features_extractor = pretrained_model.features_extractor
-        self.standard_forward = super(ValidOutputBaseActorCriticPolicy, self).forward
-        self.projection_layer = self.construct_optimization_layer()
+        features_extractor_kwargs = {'features': ["features"]}
+        features_extractor_class = FilterForFeaturesExtractor
 
-    #@abstractmethod
+
+        #self.standard_forward = self.forward_pass_standard
+        self.projection_layer = self.construct_optimization_layer(self)
+        self.action_net = ActionNet(self.action_net, self.projection_layer, self.map_action_to_valid_space)
+
+
     def construct_optimization_layer(self):
         """
         How to construct the layer mapping model action to a valid space
@@ -53,20 +60,20 @@ class ValidOutputBaseActorCriticPolicy(ActorCriticPolicy):
         """
         raise NotImplementedError
 
-    def _build_mlp_extractor(self) -> None:
-        """
-        Create the policy and value networks.
-        Part of the layers can be shared.
-        """
-        # Note: If net_arch is None and some features extractor is used,
-        #       net_arch here is an empty list and mlp_extractor does not
-        #       really contain any layers (acts like an identity module).
-        self.mlp_extractor = MlpExtractor(
-            self.features_dim -2,
-            net_arch=self.net_arch,
-            activation_fn=self.activation_fn,
-            device=self.device,
-        )
+    #def _build_mlp_extractor(self) -> None:
+    #    """
+    #    Create the policy and value networks.
+    #    Part of the layers can be shared.
+    #    """
+    #    # Note: If net_arch is None and some features extractor is used,
+    #    #       net_arch here is an empty list and mlp_extractor does not
+    ##    #       really contain any layers (acts like an identity module).
+    #    self.mlp_extractor = MlpExtractor(
+    #        self.features_dim ,
+    #        net_arch=self.net_arch,
+    #        activation_fn=self.activation_fn,
+    #        device=self.device,
+    #    )
 
     def map_action_to_valid_space(self, action, clamp_params):
         """
@@ -76,17 +83,16 @@ class ValidOutputBaseActorCriticPolicy(ActorCriticPolicy):
         :return: The action mapped to the valid action space.
         """
         # Throw not implemented error since this is an abstract class.
-        raise NotImplementedError
+        pass
 
     def predict_values(self, obs: torch.Tensor) -> torch.Tensor:
         """
         Get the estimated values according to the current policy given the observations.
 
-        :param obs:
+        :param obs: Observation.
         :return: the estimated values.
         """
         features = self.extract_features(obs)
-        features = features[:, :-2]
         latent_vf = self.mlp_extractor.forward_critic(features)
         return self.value_net(latent_vf)
 
@@ -101,14 +107,28 @@ class ValidOutputBaseActorCriticPolicy(ActorCriticPolicy):
             and entropy of the action distribution.
         """
         # Preprocess the observation if needed
+        action_bounds = obs["action_bounds"]
         features = self.extract_features(obs)
-        features = features[:, :-2]
         latent_pi, latent_vf = self.mlp_extractor(features)
-        distribution = self._get_action_dist_from_latent(latent_pi)
 
+        if True:
+            mean_actions = self.action_net(latent_pi)
+            #print("No action_bounds specified")
+        else:
+            mean_actions  = self.action_net(latent_pi)
+            mean_actions = torch.clamp(mean_actions, action_bounds[:, 0:1], action_bounds[:, 1:2])
+
+        distribution = self._get_action_dist_from_mean(mean_actions, latent_pi)
+        #distribution = self.get_distribution_torch(mean_actions)
+        #log_prob = distribution.log_prob(actions)
+        #mask_high = actions == action_bounds[:, 1:]
+        #mask_low = actions == action_bounds[:, 0:1]
+        #mask_middle =  torch.logical_not(mask_high + mask_low)
+        #log_prob = mask_high * (torch.log(1 - distribution.cdf(actions))) + mask_low * torch.log(distribution.cdf(actions)) + mask_middle * distribution.log_prob(actions)
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
-        return values, log_prob, distribution.entropy()
+        entropy = distribution.entropy()
+        return values, log_prob, entropy
 
     def forward(self, obs: torch.Tensor, deterministic: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -118,105 +138,60 @@ class ValidOutputBaseActorCriticPolicy(ActorCriticPolicy):
         :param deterministic: Whether to sample or use deterministic actions
         :return: action, value and log probability of the action
         """
-        valid_check = obs[:, -2:]
-        obs = obs[:, :-2]
+        # Preprocess the observation if needed
+        features = obs["features"]
+        action_bounds = obs["action_bounds"]
+        features = self.extract_features(obs)
+        latent_pi, latent_vf = self.mlp_extractor(features)
+        values = self.value_net(latent_vf)
 
-        actions, values, log_prob = self.standard_forward(obs, deterministic)
+        if action_bounds == None:
+            mean_actions = self.action_net(latent_pi)
+            print("No bounds Specified")
+        else:
+            mu, mu_original = self.action_net(latent_pi, action_bounds)
+        #distribution  = self.get_distribution_torch(mu)
+        #actions_original = distribution.sample()
+        distribution = self._get_action_dist_from_mean(mu, latent_pi)
+        actions_original = distribution.get_actions(deterministic=deterministic)
 
-        actions = self.map_action_to_valid_space(self, actions, valid_check)
+        if action_bounds is not None:
+            # In the evaluation we clamp the actions, since we do not need the gradient (in comparison to forward pass, where we use the projection layer (cvxpy)
+            actions = torch.clamp(actions_original, action_bounds[:, 0:1], action_bounds[:, 1:2])
+
+        #mask_high = actions == action_bounds[:, 1:]
+        #mask_low = actions == action_bounds[:, 0:1]
+        #mask_middle =  torch.logical_not(mask_high + mask_low)
+        #log_prob = mask_high * (torch.log(1 - distribution.cdf(actions))) + mask_low * torch.log(distribution.cdf(actions)) + mask_middle * distribution.log_prob(actions)
+        #log_prob = log_prob.squeeze()
+        log_prob = distribution.log_prob(actions)
+
         return actions, values, log_prob
 
-    def pretrain_mlp_extractor(self, env, learnable_env, teacher_policy):
+    def _get_action_dist_from_mean(self, mean_actions: torch.Tensor, latent_pi) -> Distribution:
         """
-        Pretrain the policy and value networks.
-        Get an observation from the environment
-        Simulateously sample observations from both env and learnable env. Feed the env's observation to self and the learnable env's observation to teacher policy
-        Get the action from the teacher policy
-        Get the action from the self
-        Calculate the loss between the two actions
-        Backpropagate the loss to the self
-        Repeat
-        Args:
-            env:
+        Retrieve action distribution given the latent codes.
 
-        Returns:
-
+        :param latent_pi: Latent code for the actor
+        :return: Action distribution
         """
-        # Get an observation from the environment
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
 
-        import numpy as np
-        print("______________________")
-        episode_len = 1
-        n_episodes = 100
-        teacher_action = teacher_policy.train(episode_len*n_episodes)
-        # teacher_action = teacher_action[teacher_policy.planning_horizon:]
-        para_list2 = []
-        # Throw away the first episode_len actions of env
-        #for i in range(episode_len):
-        #    env.step(0)
-        loss_lst = []
-        action_list = []
-        n_epochs = 100
-        #self.action_dist.proba_distribution_net(latent_dim=latent_dim_pi)
-        for x in range(n_epochs):
-            env.reset()
-            for n_episodes in range(n_episodes):
-                print(n_episodes*episode_len, (n_episodes+1)*episode_len)
-                episodic_teacher_action = teacher_action[n_episodes*episode_len:(n_episodes+1)*episode_len]
-                action_list = []
-                #obs = env.step(episodic_teacher_action[0])[0]
-                teacher2_action_list = []
-                sample_weights = []
-                for i in range(episode_len):
+        if isinstance(self.action_dist, DiagGaussianDistribution):
+            return self.action_dist.proba_distribution(mean_actions, self.log_std)#, mean_actions, original_mean
+        elif isinstance(self.action_dist, CategoricalDistribution):
+            # Here mean_actions are the logits before the softmax
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, MultiCategoricalDistribution):
+            # Here mean_actions are the flattened logits
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, BernoulliDistribution):
+            # Here mean_actions are the logits (before rounding to get the binary actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions)
+        elif isinstance(self.action_dist, StateDependentNoiseDistribution):
+            return self.action_dist.proba_distribution(mean_actions, self.log_std, latent_pi)
+        else:
+            raise ValueError("Invalid action distribution")
 
-                    time_stamp = env.get_current_timestamp()
-                    time_stamp = time_stamp.hour * 60 + time_stamp.minute
-                    # 3:00 - 4:45 Buy Range
-                    if time_stamp >= 3*60 and time_stamp <= 4*60+45:
-                        actionT = 0.15
-                        w = 20/24
-                    # 16:30 - 18:15 Sell Range
-                    elif time_stamp>=16*60+30 and time_stamp <= 18*60+15:
-                        actionT = -0.15
-                        w = 20/24
-                    else:
-                        actionT = 0.0
-                        w = 4/24
-                    sample_weights.append(w)
-                    obs = env.step(actionT)[0]
-                    obs = obs[np.newaxis]
-                    obs = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
-                    actions, _, _ = self(obs, deterministic=True)
-                    #if(episodic_teacher_action[i] != 0):
-                    #    print("env_time: ", env.get_current_timestamp(), "Teacher action: ", episodic_teacher_action[i], "Student action: ", actions,"observation: ", obs)
-
-                    #actions, values, log_prob = self(obs, deterministic=True)
-                    #values.detach(), log_prob.detach(), actions.detach()
-                    action_list.append(actions)
-                    teacher2_action_list.append(actionT)
-                # Calulate the loss between the two actions
-                torched_actions = torch.cat(action_list)
-                torched_teacher_actions = torch.tensor(teacher2_action_list, dtype = torch.float32)
-                sample_weights = torch.tensor(sample_weights, dtype=torch.float32)
-
-                loss_mse = torch.nn.MSELoss()
-
-
-                loss_mse = (loss_mse(torched_teacher_actions, torched_actions)*sample_weights).mean()
-                # Backpropagate the loss to the self
-                optimizer.zero_grad()
-                loss_mse.backward()
-                optimizer.step()
-                para_list = []
-                for para in self.action_net.parameters():
-                    para_list.append(para)
-                print(f"pretrainingloss {loss_mse}")
-                if env.wandb_log:
-                    env.wandb_run.log({"pretrainingloss": loss_mse})
-                loss_lst.append(loss_mse.detach().numpy())
-
-        print("______________________")
 
 class ClampedActorCriticPolicy(ValidOutputBaseActorCriticPolicy):
     """

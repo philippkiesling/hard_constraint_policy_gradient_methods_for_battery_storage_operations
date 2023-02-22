@@ -7,7 +7,9 @@ from batterytrading.ppo import RecurrentPPOHardConstraints
 #    LinearProjectedMlpLstmPolicy, \
 #    ActivationFunctionProjectedMlpLstmPolicy
 from batterytrading.policies.recurrent_policies_dict import ClampedMlpLstmPolicy, LinearProjectedMlpLstmPolicy, ActivationFunctionProjectedMlpLstmPolicy
+from batterytrading.policies.mlp_policies import LinearProjectedActorCriticPolicy, ClampedActorCriticPolicy
 from batterytrading.ppo.model_setup_dict import get_config
+from batterytrading.ppo.model_setup import get_config as get_config_old
 #from batterytrading.ppo.policies import
 from stable_baselines3.ppo import MultiInputPolicy
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy, MaskableMultiInputActorCriticPolicy
@@ -16,7 +18,7 @@ from maskable_recurrent.ppo_mask_recurrent import  MaskableRecurrentActorCriticP
 from maskable_recurrent.ppo_mask_recurrent import MaskableRecurrentPPO
 # Get Conifguration
 model_cfg, train_cfg = get_config("./ppo/cfg.yml")
-
+#model_cfg, train_cfg = get_config_old("./ppo/cfg.yml")
 
 policy_type = model_cfg.pop("policy_type")
 if policy_type == "MlpPolicyMasked":
@@ -30,6 +32,8 @@ if policy_type == "MlpPolicyMasked":
 elif policy_type == "MlpPolicy":
     model_cfg["policy"] = MultiInputPolicy
     #model_cfg["policy"] = MaskableMultiInputActorCriticPolicy
+    model_cfg.pop("proj_coef")
+    model_cfg.pop("clip_range_proj")
     model = PPO(**model_cfg)
     print(">>>>>>>> Using  MLP-PPO<<<<<<<<")
 elif policy_type == "MlpLstmPolicyMasked":
@@ -43,6 +47,8 @@ elif policy_type == "MlpLstmPolicy":
     print(">>>>>>>> Using Recurrent-PPO <<<<<<<<")
 elif policy_type == "ClampedMlpPolicy":
     model_cfg["policy"] = ClampedActorCriticPolicy
+    model_cfg.pop("proj_coef")
+    model_cfg.pop("clip_range_proj")
     model = PPO(**model_cfg)
     print(">>>>>>>> Using ClampedMlp-PPO <<<<<<<<")
 elif policy_type == "LinearProjectedMlpPolicy":
@@ -68,8 +74,19 @@ else:
 model.learn(
             **train_cfg)
 
+# evaluate
 
 # Prediction Script
+env = train_cfg["callback"].eval_env
+env = env.envs[0]
+env.prefix = "final_"
+obs = env.observation_space.sample()
+_states = None
+print(">>>>>>>>>> Evaluation <<<<<<<<<<<")
+while True:
+    action, _states = model.predict(obs, state=_states)
+    obs, rewards, dones, info = env.step(action)
+
 """
 env = model_cfg["env"]
 done = False

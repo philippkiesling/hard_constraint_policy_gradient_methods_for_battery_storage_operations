@@ -19,14 +19,15 @@ def construct_cvxpy_optimization_layer(self):
     _lower_bound = cp.Parameter(1)
     _upper_bound = cp.Parameter(1)
     _action = cp.Variable(n)
-    obj = cp.Minimize(cp.sum_squares(_action - _x))
+    #obj = cp.Minimize(cp.sum_squares(_action - _x))
+    obj = cp.Minimize(cp.huber(_action - _x) + 0.1 * cp.norm1(_x))
+
     cons = [_action >= _lower_bound, _action <= _upper_bound]
     prob = cp.Problem(obj, cons)
+    #prob.solve(solver=cp.SCS)
 
     layer = CvxpyLayer(prob, parameters=[_x, _lower_bound, _upper_bound], variables=[_action])
-
     self.projection_loss = nn.MSELoss(reduction='none')
-
     return layer
 
 
@@ -55,16 +56,14 @@ def construct_cvxpy_optimization_layer_improved_version(self):
 
 
 def map_action_to_valid_space_cvxpy_layer(self, action_original, clamp_params):
-    # action = torch.sigmoid(action)
-    # Add a small value to the lower bound to avoid numerical issues
-    # print("action", action)
-    # print("clamp_params", clamp_params)
-    # print(clamp_params[0][:1]-1e-2, clamp_params[0][1:2] + 1e-2)
-    # print("action", action, "clamp_params", clamp_params)
+    clamp_params = torch.Tensor(clamp_params)
     try:
-        action = action_original
-
-        #action = self.projection_layer(action_original, clamp_params[:, :1] - 1e-3, clamp_params[:, 1:] + 1e-3)[0]
+        action = self.projection_layer(action_original, clamp_params[:, :1], clamp_params[:, 1:],
+                                       solver_args = {
+                                            "eps": 1e-3,
+                                            "normalize": True,
+                                            "max_iter": 1000
+                                        } )[0]
     except:
         print("Mapping Failed", "action", action_original, "clamp_params", clamp_params)
         action = action_original
