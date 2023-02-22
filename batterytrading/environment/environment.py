@@ -166,7 +166,7 @@ class Environment(core.Env):
         self.data_loader.reset()
         # super().reset()
         self.n_steps = 0
-        return self.step(np.array([0]))[0]
+        return self.step(np.array([0]))#[0]
 
     def _get_next_state(self, action):
         """

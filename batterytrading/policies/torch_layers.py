@@ -45,7 +45,7 @@ class ActionNet(nn.Module):
         """
         mean_actions_original = self.net(latent_pi)
         #mean_actions_original = self.linear(mean_actions_original)
-        if action_bounds == None:
+        if isinstance(action_bounds, type(None)):
             return mean_actions_original
         else:
             from copy import deepcopy

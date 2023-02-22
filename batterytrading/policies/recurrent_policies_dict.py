@@ -157,7 +157,6 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
                 num_layers=n_lstm_layers,
                 **self.lstm_kwargs,
             )
-        self.action_net = ActionNet(self.action_net, self.projection_layer, self.map_action_to_valid_space)
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
 
@@ -206,6 +205,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         actions: th.Tensor,
         lstm_states: RNNStates,
         episode_starts: th.Tensor,
+        action_bounds: th.Tensor = None,
     ) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Evaluate actions according to the current policy,
@@ -221,7 +221,6 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         """
         # Preprocess the observation if needed
         features = self.extract_features(obs)
-        action_bounds = obs["action_bounds"]
         latent_pi, _ = self._process_sequence(features, lstm_states.pi, episode_starts, self.lstm_actor)
 
         if self.lstm_critic is not None:
@@ -239,8 +238,9 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
             mean_actions = self.action_net(latent_pi)
             #print("No action_bounds specified")
         else:
-            mean_actions  = self.action_net(latent_pi)
-            mean_actions = torch.clamp(mean_actions, action_bounds[:, 0:1], action_bounds[:, 1:2])
+            # For box constraints we can map with torch.clamp, too
+            mean_actions_original  = self.action_net(latent_pi)
+            mean_actions = self.map_action_to_valid_space(mean_actions_original, action_bounds)
 
         distribution = self._get_action_dist_from_mean(mean_actions, latent_pi)
         #distribution = self.get_distribution_torch(mean_actions)
@@ -260,6 +260,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         lstm_states: RNNStates,
         episode_starts: th.Tensor,
         deterministic: bool = False,
+        action_bounds: Optional[th.Tensor] = None,
     ) -> Tuple[th.Tensor, th.Tensor, th.Tensor, RNNStates]:
         """
         Forward pass in all the networks (actor and critic)
@@ -273,7 +274,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         """
         # Preprocess the observation if needed
         features = obs["features"]
-        action_bounds = obs["action_bounds"]
+
         features = self.extract_features(obs)
         # latent_pi, latent_vf = self.mlp_extractor(features)
         latent_pi, lstm_states_pi = self._process_sequence(features, lstm_states.pi, episode_starts, self.lstm_actor)
@@ -294,11 +295,11 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
         # Evaluate the values for the given observations
         values = self.value_net(latent_vf)
 
-        if action_bounds == None:
-            mean_actions = self.action_net(latent_pi)
+        mu_original = self.action_net(latent_pi)
+        if isinstance(action_bounds, type(None)):
             print("No bounds Specified")
         else:
-            mu, mu_original = self.action_net(latent_pi, action_bounds)
+            mu = self.map_action_to_valid_space(self, mu_original, action_bounds)
         #distribution  = self.get_distribution_torch(mu)
         #actions_original = distribution.sample()
         distribution = self._get_action_dist_from_mean(mu, latent_pi)
@@ -306,8 +307,7 @@ class ValidOutputBaseRecurrentActorCriticPolicy(MlpLstmPolicy):
 
         if action_bounds is not None:
             # In the evaluation we clamp the actions, since we do not need the gradient (in comparison to forward pass, where we use the projection layer (cvxpy)
-            actions = torch.clamp(actions_original, action_bounds[:, 0:1], action_bounds[:, 1:2])
-
+            actions = self.map_action_to_valid_space(self, actions_original, action_bounds)
         #mask_high = actions == action_bounds[:, 1:]
         #mask_low = actions == action_bounds[:, 0:1]
         #mask_middle =  torch.logical_not(mask_high + mask_low)

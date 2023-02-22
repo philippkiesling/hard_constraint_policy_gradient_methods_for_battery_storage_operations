@@ -14,7 +14,7 @@ from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import explained_variance, get_schedule_fn, obs_as_tensor, safe_mean
 from stable_baselines3.common.vec_env import VecEnv
-
+from batterytrading.ppo.utils import get_action_bounds
 from sb3_contrib.common.recurrent.buffers import RecurrentDictRolloutBuffer, RecurrentRolloutBuffer
 from batterytrading.common.buffers import ClampedRecurrentRolloutBuffer, ClampedRecurrentDictRolloutBuffer
 from sb3_contrib.common.recurrent.policies import RecurrentActorCriticPolicy
@@ -252,7 +252,8 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 episode_starts = th.tensor(self._last_episode_starts).float().to(self.device)
-                actions, values, log_probs, lstm_states, actions_original, mu, original_mu = self.policy.forward(obs_tensor, lstm_states, episode_starts, deterministic=False)
+                action_bounds = get_action_bounds(self.env)
+                actions, values, log_probs, lstm_states, actions_original, mu, original_mu = self.policy.forward(obs_tensor, lstm_states, episode_starts, deterministic=False, action_bounds=action_bounds)
                 #actions, values, log_probs, lstm_states = self.policy.forward(obs_tensor, lstm_states, episode_starts)
 
             actions = actions.cpu().numpy()
@@ -367,11 +368,14 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
 
+                action_bounds = get_action_bounds(self.env)
+
                 values, log_prob, entropy = self.policy.evaluate_actions(
                     rollout_data.observations,
                     actions,
                     rollout_data.lstm_states,
                     rollout_data.episode_starts,
+                    action_bounds = action_bounds,
                 )
 
                 values = values.flatten()
