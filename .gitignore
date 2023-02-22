@@ -139,3 +139,8 @@ data/
 /batterytrading/models/
 ./wandb
 /batterytrading/wandb
+/stable-baselines3-contrib-maskable-recurrent-ppo/tests/ppo_mask.zip
+
+# Zip And png files (images and models
+*.png
+*.zip
