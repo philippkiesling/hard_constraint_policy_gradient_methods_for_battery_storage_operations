@@ -51,7 +51,27 @@ def get_hourly_data(root_path=""):
 
 def get_gaussian_noise(mean, std, size):
     return np.random.normal(mean, std, size)
-
+def get_solar_data(root_path=""):
+    """
+    Get solar data from csv.
+    Returns:
+        df_solar: Dataframe with solar data
+    """
+    df_solar = pd.read_csv(
+        f"{root_path}data/solar_data.csv",
+        parse_dates=["date"],
+    )
+    df_solar = df_solar.iloc[:, 1:]
+    df_solar = df_solar.set_index("date")
+    # For each year between 2015 duplicate the data and add one year to the date
+    for year in range(2016, 2024):
+        df_solar_year = df_solar.loc[df_solar.index.year == 2015]
+        df_solar_year.index = df_solar_year.index + pd.DateOffset(years=year-2015)
+        df_solar = pd.concat([df_solar,df_solar_year])
+    df_solar = df_solar.sort_index()
+    # Resample to 15 min with linear interpolation
+    # Multiply Gaussian noise with std 0.1
+    return df_solar
 def get_data(root_path="", time_interval = "15min", gaussian_noise = False, noise_std = -1)  -> pd.DataFrame:
     """
     Get 15min and hourly data from csv.
@@ -61,16 +81,20 @@ def get_data(root_path="", time_interval = "15min", gaussian_noise = False, nois
     """
     df_15min = get_15min_data(root_path)
     df_hour = get_hourly_data(root_path)
+    df_solar = get_solar_data(root_path)
     df_hour = df_hour.drop_duplicates("date")
     df_hour = df_hour.set_index("date")
     #df_hour["Day-Ahead Auction"] = df_hour["Day-Ahead Auction"].resample("15min").interpolate()
     df = df_15min.set_index("date").join(df_hour[["Day-Ahead Auction"]], how="left")
-
+    df = df.join(df_solar[["electricity"]], how="left")
+    df["solar"] = df["electricity"].interpolate(method='linear')
+    df["solar"] = df["solar"] #* get_gaussian_noise(1, 0.05, df["solar"].shape[0])
+    df["solar"] = df["solar"].fillna(0.0)
     df.loc[df["Intraday Continuous 15 minutes ID3-Price"].isna(), "Intraday Continuous 15 minutes ID3-Price"] = df.loc[df["Intraday Continuous 15 minutes ID3-Price"].isna(), "Intraday Continuous 15 minutes Average Price"]
     df.loc[df["Intraday Continuous 15 minutes ID3-Price"].isna(), "Intraday Continuous 15 minutes ID3-Price"] = df.loc[df["Intraday Continuous 15 minutes ID3-Price"].isna(), "Intraday Continuous 15 minutes ID1-Price"]
 
     #df["Intraday Continuous 15 minutes ID3-Price"] = df["Intraday Continuous 15 minutes ID3-Price"].interpolate(method='linear')
-    df = df[~df[["Day-Ahead Auction", "Intraday Continuous 15 minutes ID3-Price"]].isna()]
+    #df = df[~df[["Day-Ahead Auction", "Intraday Continuous 15 minutes ID3-Price"]].isna()]
     df = df.rename(
         columns={
             "Intraday Continuous 15 minutes ID3-Price": "intraday_15min",
@@ -95,31 +119,7 @@ def get_data(root_path="", time_interval = "15min", gaussian_noise = False, nois
     df = df[~df["intraday_15min_diff10"].isna()]
     df = df[~df["intraday_15min_diff"].isna()]
 
-    #res1 = []
-    #res2 = []
-    #for time_idx, features in df[["intraday_15min", "day_ahead"]].iloc[0:].iterrows():
-    #    x = features.to_dict()
-    ##    res = scaler.learn_one(x).transform_one(x)
-    #    res1.append(res["intraday_15min"])
-    #    res2.append(res["day_ahead"])
-    #df["intraday_15min_scaled"] = res1
-    #df["day_ahead_scaled"] = res2
-
-    from river.preprocessing import AdaptiveStandardScaler
-    scaler = AdaptiveStandardScaler(fading_factor=0.11)
-    res = []
-    for x in df["intraday_15min"].iloc[0:]:
-        x = {"x": x}
-        res.append(scaler.learn_one(x).transform_one(x)["x"])
-    df["intraday_15min_scaled"] = res
-
-    scaler = AdaptiveStandardScaler(fading_factor=0.11)
-    res = []
-    for x in df["day_ahead"].iloc[0:]:
-        x = {"x": x}
-        res.append(scaler.learn_one(x).transform_one(x)["x"])
-    df["day_ahead_scaled"] = res
-    # Resample to hourly data if time_interval is "H"
+    # merge solar data on index
     if time_interval == "H":
         df = df.resample("H").mean()
         df["intraday_15min"] = df["intraday_15min"].interpolate("linear")
@@ -128,7 +128,6 @@ def get_data(root_path="", time_interval = "15min", gaussian_noise = False, nois
         df["intraday_15min"] = df["intraday_15min"] + get_gaussian_noise(0, noise_std, df.shape[0])
         df["day_ahead"] = df["day_ahead"] + get_gaussian_noise(0, noise_std, df.shape[0])
     return df
-
 
 class Data_Loader_np:
     def __init__(self, price_time_horizon=1.5,
@@ -283,14 +282,25 @@ class Data_Loader_np:
         #day_ahead_price = day_ahead_price[46:47]
         day_ahead_price[np.isnan(day_ahead_price)] = 0.0
         if self.time_features:
-            features = np.hstack([intraday_price[0:self.n_past_timesteps],intraday_price[0:self.n_past_timesteps], day_ahead_price, time_features ])
+            features = np.hstack([intraday_price[0:self.n_past_timesteps], intraday_price[0:self.n_past_timesteps], day_ahead_price, time_features ])
         else:
-            features = np.hstack([intraday_price[0:self.n_past_timesteps],intraday_price[0:self.n_past_timesteps], day_ahead_price])
+            features = np.hstack([intraday_price[0:self.n_past_timesteps], intraday_price[0:self.n_past_timesteps], day_ahead_price])
         price = intraday_price[0]
         done = done_day_ahead or done_intraday or done_time_features
 
         self.current_index += 1
         return features, price, done
+
+class Data_Loader_np_solar(Data_Loader_np):
+    def __init__(self, *args, **kwargs):
+        super().__init__( *args, **kwargs)
+    def get_next_features(self):
+        solar_production = self.data.iloc[self.current_index]["solar"]/6
+        features, price, done = super().get_next_features()
+        features = np.hstack([features, solar_production])
+        self.solar_production = solar_production
+        return features, price,  done
+
 
 class RandomSampleDataLoader(Data_Loader_np):
     def __init__(self, price_time_horizon=1.5, data=None, root_path="", time_interval="15min", n_past_timesteps = 1, time_features = True):
@@ -364,3 +374,4 @@ if __name__ == "__main__":
         if done:
             break
         # print(day_ahead_price, intraday_price)
+# Check if cuda is available
