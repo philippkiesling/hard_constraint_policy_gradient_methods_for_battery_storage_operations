@@ -153,7 +153,6 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             ClampedRecurrentDictRolloutBuffer if isinstance(self.observation_space, gym.spaces.Dict) else ClampedRecurrentRolloutBuffer
         )
 
-
         self.policy = self.policy_class(
             self.observation_space,
             self.action_space,
@@ -189,7 +188,6 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
             self.n_steps,
             self.observation_space,
             self.action_space,
-            #gym.spaces.box.Box(-1, 1, shape=(3,)),
             hidden_state_buffer_shape,
             self.device,
             gamma=self.gamma,
@@ -302,7 +300,6 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
 
             rollout_buffer.add(
                 self._last_obs,
-                #actions,
                 actions,
                 rewards,
                 self._last_episode_starts,
@@ -411,6 +408,7 @@ class RecurrentPPOHardConstraints(OnPolicyAlgorithm):
                 value_loss = th.mean(((rollout_data.returns - values_pred) ** 2)[mask])
 
                 value_losses.append(value_loss.item())
+
                 # Entropy loss favor exploration
                 if entropy is None:
                     # Approximate entropy when no analytical form
